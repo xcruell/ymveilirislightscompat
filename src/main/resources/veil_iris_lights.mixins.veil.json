@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.yesmenn.veilirislights.compat.veil.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinPackResourceListener",
+    "MixinVoxelShadowGrid",
+    "MixinVeilNativeLightPass"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

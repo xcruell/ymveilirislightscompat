@@ -1,0 +1,94 @@
+YESMENN CUSTOM LICENSE
+Version 1.0, 10 June 2026
+
+Copyright (c) 2026 xcruell, YesMenn
+All rights reserved.
+
+This license applies to the software project distributed with this file,
+including its source code, compiled binaries, assets, documentation, and other
+original materials (the "Software").
+
+1. PERMITTED USE
+
+You may download, install, and use the Software for personal, educational, and
+non-commercial purposes.
+
+2. MODPACK DISTRIBUTION
+
+You may include an unmodified, official release of the Software in a modpack
+provided that:
+
+- the modpack can be downloaded and used without payment, purchase,
+  subscription, or mandatory donation;
+- the Software is not sold, licensed for a fee, or offered as a separately
+  paid feature;
+- the Software is credited to xcruell and YesMenn and a link to an official project page
+  is provided where reasonably possible;
+- this license and all copyright notices remain intact; and
+- you do not imply that the modpack is endorsed by or affiliated with the
+  copyright holder.
+
+Voluntary donations and ordinary platform advertising are permitted, provided
+that payment is not required to access the modpack or the Software.
+
+3. USE BY OTHER MODS AND COMPATIBILITY PROJECTS
+
+Other mods and software projects may:
+
+- declare the Software as a dependency;
+- interact with it through public APIs, documented interfaces, events,
+  registries, identifiers, or normal mod-loader mechanisms; and
+- create and distribute independent compatibility addons.
+
+Such projects may use their own license, provided that they do not copy or
+embed substantial portions of the Software's source code, binaries, or assets.
+This permission does not grant permission to redistribute the Software itself
+outside the modpack permission in Section 2, nor does it imply endorsement.
+
+4. RESTRICTIONS
+
+Without prior written permission from the copyright holder, you may not:
+
+- redistribute the Software as a standalone download, mirror, or reupload;
+- distribute modified builds, forks, ports, or derivative versions of the
+  Software;
+- copy, republish, sublicense, or incorporate the Software's source code,
+  binaries, textures, models, sounds, branding, or other assets into another
+  project;
+- sell, rent, commercially license, or place the Software or a modpack
+  containing it behind a paywall;
+- remove or alter copyright, attribution, or license notices; or
+- represent yourself as the author or official maintainer of the Software.
+
+5. SOURCE AVAILABILITY
+
+Access to the source code does not make the Software open source and does not
+grant rights beyond those explicitly stated in this license.
+
+6. THIRD-PARTY MATERIAL
+
+Third-party libraries, APIs, template files, and other materials included with
+or referenced by the Software remain subject to their respective licenses.
+Those licenses are not replaced or restricted by this license. In particular,
+NeoForge MDK template files remain covered by the separate
+TEMPLATE_LICENSE.txt where that file is present.
+
+7. TERMINATION
+
+Your permission under this license terminates automatically if you violate its
+terms. Upon termination, you must stop distributing the Software and remove
+unauthorized copies under your control.
+
+8. ADDITIONAL PERMISSION
+
+For permissions not granted here, contact the copyright holder through an
+official project page. Additional permission is valid only when provided in
+writing by the copyright holder.
+
+9. DISCLAIMER
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. TO THE MAXIMUM EXTENT
+PERMITTED BY LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY CLAIM,
+DAMAGE, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.

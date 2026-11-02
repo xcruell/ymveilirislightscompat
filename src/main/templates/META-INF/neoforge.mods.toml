@@ -1,0 +1,60 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+authors="xcruell, YesMenn!"
+description='''
+Renders Veil point and area lights on top of the active Iris shaderpack,
+with an optional fallback pass when shaderpacks are disabled.
+'''
+
+[[mixins]]
+config="${mod_id}.mixins.iris.json"
+
+[[mixins]]
+config="${mod_id}.mixins.veil.json"
+
+[[mixins]]
+config="${mod_id}.mixins.betterf3.json"
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="[${neo_version},)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="iris"
+    type="required"
+    reason="VILC requires the Iris rendering pipeline APIs introduced in Iris 1.8.14 beta 1."
+    versionRange="[1.8.14-beta.1,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="veil"
+    type="required"
+    reason="VILC reads Veil point and area lights and composites them into Iris."
+    versionRange="[4.5.2,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="sodium"
+    type="required"
+    reason="VILC requires Sodium 0.8.12-beta.1+mc1.21.1."
+    versionRange="[0.8.12-beta.1+mc1.21.1,)"
+    ordering="NONE"
+    side="CLIENT"

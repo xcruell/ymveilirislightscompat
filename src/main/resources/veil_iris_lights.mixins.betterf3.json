@@ -1,0 +1,12 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.yesmenn.veilirislights.mixin.betterf3",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinBetterF3DebugRenderer"
+  ],
+  "injectors": {
+    "defaultRequire": 0
+  }
+}

@@ -1,0 +1,154 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.141'
+    id 'idea'
+}
+
+tasks.named('wrapper', Wrapper).configure {
+    distributionType = Wrapper.DistributionType.BIN
+}
+
+version = mod_version
+group = mod_group_id
+
+repositories {
+    maven {
+        name = 'BlameJared Maven'
+        url = 'https://maven.blamejared.com'
+    }
+    maven {
+        name = 'neoforged releases'
+        url = 'https://maven.neoforged.net/releases/'
+    }
+    maven {
+        name = 'caffeinemc releases'
+        url = 'https://maven.caffeinemc.net/releases'
+    }
+    maven {
+        name = 'caffeinemc snapshots'
+        url = 'https://maven.caffeinemc.net/snapshots'
+    }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = 'Modrinth'
+                url = 'https://api.modrinth.com/maven'
+            }
+        }
+        filter {
+            includeGroup 'maven.modrinth'
+        }
+    }
+}
+
+base {
+    archivesName = mod_id
+}
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+        }
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+    sodiumDevBootstrap
+    sodiumDevMod
+}
+
+def sodiumDevJar = tasks.register('sodiumDevJar', Jar) {
+    archiveBaseName = 'sodium-neoforge-dev'
+    archiveVersion = sodium_version
+    destinationDirectory = layout.buildDirectory.dir('devlibs')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    from({
+        configurations.sodiumDevBootstrap.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/jarjar/metadata.json'
+        exclude 'META-INF/jarjar/net.caffeinemc.sodium-neoforge-*-mod.jar'
+        exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    }
+    from({
+        configurations.sodiumDevMod.collect { zipTree(it) }
+    }) {
+        exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+    }
+    from('src/dev/resources')
+}
+
+dependencies {
+    compileOnly("maven.modrinth:iris:${iris_version}-neoforge")
+    localRuntime("maven.modrinth:iris:${iris_version}-neoforge")
+    sodiumDevBootstrap("net.caffeinemc:sodium-neoforge:${sodium_version}@jar")
+    sodiumDevMod("net.caffeinemc:sodium-neoforge-mod:${sodium_version}@jar")
+    localRuntime(files(sodiumDevJar.flatMap { it.archiveFile }).builtBy(sodiumDevJar))
+    compileOnly("net.caffeinemc:sodium-neoforge-api:${sodium_version}")
+
+    compileOnly("foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+    }
+    localRuntime("foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+    }
+}
+
+def generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    def replaceProperties = [
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.named('processResources', ProcessResources).configure {
+    from('LICENSE') {
+        into 'META-INF'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+idea {
+    module {
+        downloadSources = true
+        downloadJavadoc = true
+    }
+}
