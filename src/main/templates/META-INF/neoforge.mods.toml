@@ -7,6 +7,7 @@ modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
 authors="xcruell, YesMenn!"
+logoFile="icon.png"
 description='''
 Renders Veil point and area lights on top of the active Iris shaderpack,
 with an optional fallback pass when shaderpacks are disabled.

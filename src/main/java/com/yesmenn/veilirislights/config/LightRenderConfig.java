@@ -29,19 +29,25 @@ public final class LightRenderConfig {
     public static final double MAX_LUMINANCE_BOOST_LIMIT = 1.6;
     public static final int MAX_POINT_LIGHTS = 96;
     public static final int MAX_AREA_LIGHTS = 96;
+    public static final int MIN_VOLUMETRIC_QUALITY = 1;
+    public static final int MAX_VOLUMETRIC_QUALITY = 3;
+    public static final int DEFAULT_VOLUMETRIC_QUALITY = 2;
 
     private static LightRenderConfig instance = defaults();
 
     public RenderQuality quality = RenderQuality.HIGH;
     public int pointLightLimit = RenderQuality.HIGH.pointLightLimit();
     public int areaLightLimit = RenderQuality.HIGH.areaLightLimit();
-    public boolean detailedNormals = RenderQuality.HIGH.detailedNormals();
     public boolean voxelShadows = RenderQuality.HIGH.voxelShadows();
     public double exposure = DEFAULT_EXPOSURE;
     public double colorStrength = DEFAULT_COLOR_STRENGTH;
     public double colorSaturation = DEFAULT_COLOR_SATURATION;
     public double neutralLift = DEFAULT_NEUTRAL_LIFT;
     public double luminanceBoostLimit = DEFAULT_LUMINANCE_BOOST_LIMIT;
+    /** Light beams (in-scattering) on or off. */
+    public boolean volumetricBeams = true;
+    /** Light beam quality: 1 = low, 2 = medium, 3 = high. */
+    public int volumetricQuality = DEFAULT_VOLUMETRIC_QUALITY;
 
     private LightRenderConfig() {
     }
@@ -120,6 +126,25 @@ public final class LightRenderConfig {
                 this.luminanceBoostLimit,
                 1.0,
                 MAX_LUMINANCE_BOOST_LIMIT);
+        // Quality 0 used to mean "off" before the separate light beam toggle existed.
+        if (this.volumetricQuality <= 0) {
+            this.volumetricBeams = false;
+            this.volumetricQuality = DEFAULT_VOLUMETRIC_QUALITY;
+        }
+        this.volumetricQuality = clamp(this.volumetricQuality, MIN_VOLUMETRIC_QUALITY, MAX_VOLUMETRIC_QUALITY);
+    }
+
+    /** Raymarch steps per pixel for light beams; 0 disables them. */
+    public int volumetricSteps() {
+        if (!this.volumetricBeams) {
+            return 0;
+        }
+        return switch (this.volumetricQuality) {
+            case 1 -> 8;
+            case 2 -> 16;
+            case 3 -> 32;
+            default -> 0;
+        };
     }
 
     private static double clamp(double value, double min, double max) {
@@ -137,7 +162,6 @@ public final class LightRenderConfig {
         this.quality = preset;
         this.pointLightLimit = preset.pointLightLimit();
         this.areaLightLimit = preset.areaLightLimit();
-        this.detailedNormals = preset.detailedNormals();
         this.voxelShadows = preset.voxelShadows();
     }
 
@@ -150,23 +174,21 @@ public final class LightRenderConfig {
     }
 
     public enum RenderQuality {
-        PERFORMANCE("option.veil_iris_lights.quality.performance", 24, 8, false, false),
-        BALANCED("option.veil_iris_lights.quality.balanced", 48, 16, false, true),
-        HIGH("option.veil_iris_lights.quality.high", 96, 32, true, true),
-        CUSTOM("option.veil_iris_lights.quality.custom", 0, 0, false, false);
+        PERFORMANCE("option.veil_iris_lights.quality.performance", 24, 8, false),
+        BALANCED("option.veil_iris_lights.quality.balanced", 48, 16, true),
+        HIGH("option.veil_iris_lights.quality.high", 96, 32, true),
+        CUSTOM("option.veil_iris_lights.quality.custom", 0, 0, false);
 
         private final String translationKey;
         private final int pointLightLimit;
         private final int areaLightLimit;
-        private final boolean detailedNormals;
         private final boolean voxelShadows;
 
         RenderQuality(String translationKey, int pointLightLimit, int areaLightLimit,
-                      boolean detailedNormals, boolean voxelShadows) {
+                      boolean voxelShadows) {
             this.translationKey = translationKey;
             this.pointLightLimit = pointLightLimit;
             this.areaLightLimit = areaLightLimit;
-            this.detailedNormals = detailedNormals;
             this.voxelShadows = voxelShadows;
         }
 
@@ -180,10 +202,6 @@ public final class LightRenderConfig {
 
         public int areaLightLimit() {
             return this.areaLightLimit;
-        }
-
-        public boolean detailedNormals() {
-            return this.detailedNormals;
         }
 
         public boolean voxelShadows() {

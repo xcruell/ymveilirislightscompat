@@ -4,14 +4,13 @@ import com.google.common.collect.ImmutableSet;
 import com.mojang.blaze3d.systems.RenderSystem;
 import foundry.veil.api.client.registry.LightTypeRegistry;
 import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.light.DDALightData;
 import foundry.veil.api.client.render.light.data.AreaLightData;
-import foundry.veil.api.client.render.light.data.LightData;
 import foundry.veil.api.client.render.light.data.SpotLightData;
 import foundry.veil.api.client.render.light.data.PointLightData;
 import foundry.veil.api.client.render.light.renderer.LightRenderHandle;
 import foundry.veil.impl.client.render.light.VoxelShadowGrid;
 import net.minecraft.client.Minecraft;
+import net.irisshaders.iris.targets.DepthTexture;
 import net.irisshaders.iris.targets.RenderTarget;
 import net.irisshaders.iris.targets.RenderTargets;
 import net.irisshaders.iris.uniforms.CameraUniforms;
@@ -33,6 +32,7 @@ import static org.lwjgl.opengl.GL12C.*;
 import static org.lwjgl.opengl.GL13C.GL_ACTIVE_TEXTURE;
 import static org.lwjgl.opengl.GL13C.GL_TEXTURE0;
 import static org.lwjgl.opengl.GL13C.GL_TEXTURE1;
+import static org.lwjgl.opengl.GL13C.GL_TEXTURE2;
 import static org.lwjgl.opengl.GL13C.glActiveTexture;
 import static org.lwjgl.opengl.GL14C.*;
 import static org.lwjgl.opengl.GL20C.*;
@@ -48,8 +48,12 @@ public final class VilcSceneLightCompositor {
     private static int vertexArray;
     private static int lightTexture;
     private static int sceneCopyTexture;
+    private static int beamTexture;
     private static int lightTextureWidth;
     private static int lightTextureHeight;
+    /** Light beams are raymarched at half resolution and upsampled bilinearly in the composite. */
+    private static int beamTextureWidth;
+    private static int beamTextureHeight;
     private static int attachedColorTexture;
     private static boolean glErrorLogged;
     private static int dummyBlockGridTexture;
@@ -57,6 +61,7 @@ public final class VilcSceneLightCompositor {
     private static int compositeLightTextureUniform;
     private static int compositeSceneTextureUniform;
     private static int compositeUseSceneTextureUniform;
+    private static int compositeBeamTextureUniform;
     private static boolean initializationFailed;
     private static boolean hookLogged;
     private static boolean targetsLogged;
@@ -85,12 +90,15 @@ public final class VilcSceneLightCompositor {
                 .mul(CapturedRenderingState.INSTANCE.getGbufferModelView())
                 .invert();
         Vector3d cameraPosition = CameraUniforms.getUnshiftedCameraPosition();
+        // Iris copies the depth buffer right before the hand renders; comparing both depths masks hand and held item.
+        DepthTexture handFreeDepth = renderTargets.getDepthTextureNoHand();
 
         renderToTarget(
                 pointHandles,
                 areaHandles,
                 colorTexture,
                 renderTargets.getDepthTexture(),
+                handFreeDepth != null ? handFreeDepth.getTextureId() : 0,
                 renderTargets.getCurrentWidth(),
                 renderTargets.getCurrentHeight(),
                 1.0F,
@@ -98,7 +106,6 @@ public final class VilcSceneLightCompositor {
                 inverseViewProjection,
                 cameraPosition,
                 SHADERPACK_LIGHT_GAIN,
-                true,
                 flippedAfterTranslucent.contains(0) ? "shaderpack-flipped" : "shaderpack");
     }
 
@@ -130,6 +137,7 @@ public final class VilcSceneLightCompositor {
                 VeilRenderSystem.renderer().getLightRenderer().getLights(LightTypeRegistry.AREA.get()),
                 colorTexture,
                 depthTexture,
+                0,
                 target.viewWidth,
                 target.viewHeight,
                 target.width > 0 ? (float) target.viewWidth / (float) target.width : 1.0F,
@@ -137,7 +145,6 @@ public final class VilcSceneLightCompositor {
                 inverseViewProjection,
                 cameraPosition,
                 1.0F,
-                false,
                 "vanilla");
     }
 
@@ -146,6 +153,7 @@ public final class VilcSceneLightCompositor {
             Collection<? extends LightRenderHandle<AreaLightData>> areaHandles,
             int colorTexture,
             int depthTexture,
+            int handFreeDepthTexture,
             int width,
             int height,
             float depthUvScaleX,
@@ -153,7 +161,6 @@ public final class VilcSceneLightCompositor {
             Matrix4f inverseViewProjection,
             Vector3d cameraPosition,
             float lightGain,
-            boolean firstPersonAdditiveEnabled,
             String targetName) {
         if (!hookLogged) {
             hookLogged = true;
@@ -179,13 +186,14 @@ public final class VilcSceneLightCompositor {
         // Both passes composite from a scene copy in the shader. Blending into the RGBA8 main target clamps the
         // light term to [0, 1], which capped colored light at 2x the scene color and made saturated lights look weak.
         boolean vanillaTuning = "vanilla".equals(targetName);
-        boolean hasOccludedLights = config.voxelShadows
-                && hasOccludedLights(pointHandles, areaHandles, spotHandles);
-        lastOcclusionEnabled = hasOccludedLights;
-        if (hasOccludedLights) {
-            VoxelShadowGrid.setup();
+        // The VILC option is the master switch: when enabled, every Veil light casts voxel shadows, regardless of
+        // the per-light occlusion flag (light mods often leave it off, which made the option appear to do nothing).
+        boolean shadowsEnabled = config.voxelShadows;
+        lastOcclusionEnabled = shadowsEnabled;
+        if (shadowsEnabled) {
+            setupVoxelGridWithCleanUnpackState();
         }
-        boolean hasUsableVoxelGrid = hasOccludedLights && VoxelShadowGridState.isReady();
+        boolean hasUsableVoxelGrid = shadowsEnabled && VoxelShadowGridState.isReady();
 
         ensureInitialized();
         if (initializationFailed || program == 0) {
@@ -216,6 +224,7 @@ public final class VilcSceneLightCompositor {
 
         VilcGlStateSnapshot.unbindTexture2DFromAllUnits(lightTexture, glState.activeTexture());
         VilcGlStateSnapshot.unbindTexture2DFromAllUnits(sceneCopyTexture, glState.activeTexture());
+        VilcGlStateSnapshot.unbindTexture2DFromAllUnits(beamTexture, glState.activeTexture());
 
         if (!copyCurrentColorTarget(glState, renderWidth, renderHeight)) {
             glState.restore();
@@ -225,8 +234,10 @@ public final class VilcSceneLightCompositor {
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, lightTexture, 0);
-        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
+        glDrawBuffers(new int[]{GL_COLOR_ATTACHMENT0, GL_NONE});
         if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
             glState.restore();
             return;
         }
@@ -251,11 +262,15 @@ public final class VilcSceneLightCompositor {
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindTexture(GL_TEXTURE_3D, hasUsableVoxelGrid ? VoxelShadowGrid.getTextureId() : dummyBlockGridTexture);
         glUniform1i(uniforms.blockGrid(), 1);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_3D, 0);
+        glBindTexture(GL_TEXTURE_2D, handFreeDepthTexture != 0 ? handFreeDepthTexture : depthTexture);
+        glUniform1i(uniforms.handFreeDepth(), 2);
+        glUniform1i(uniforms.hasHandFreeDepth(), handFreeDepthTexture != 0 ? 1 : 0);
         Vector3f gridOrigin = new Vector3f(VoxelShadowGrid.getUniformGridPos());
         glUniform3f(uniforms.gridOrigin(),
                 gridOrigin.x, gridOrigin.y, gridOrigin.z);
         glUniform1i(uniforms.hasBlockGrid(), hasUsableVoxelGrid ? 1 : 0);
-        glUniform1i(uniforms.detailedNormals(), config.detailedNormals ? 1 : 0);
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
             FloatBuffer matrix = stack.mallocFloat(16);
@@ -280,41 +295,69 @@ public final class VilcSceneLightCompositor {
         glUniform1f(uniforms.colorSaturation(), colorSaturation);
         glUniform1f(uniforms.neutralLift(), neutralLift);
         glUniform1f(uniforms.luminanceBoostLimit(), tuning.luminanceBoostLimit());
-        glUniform1i(uniforms.firstPersonAdditiveEnabled(), firstPersonAdditiveEnabled ? 1 : 0);
+        int beamSteps = config.volumetricSteps();
+        boolean beams = beamSteps > 0;
 
-        int uploadedPointCount = VilcLightBatch.uploadPointLights(
+        VilcLightBatch.Upload pointUpload = VilcLightBatch.uploadPointLights(
                 pointHandles,
                 uniforms,
                 tuning.exposure(),
                 config.pointLightLimit,
-                lightGain);
-        int uploadedAreaCount = VilcLightBatch.uploadAreaLights(
+                lightGain,
+                hasUsableVoxelGrid,
+                beams);
+        VilcLightBatch.Upload areaUpload = VilcLightBatch.uploadAreaLights(
                 areaHandles,
                 spotHandles,
                 uniforms,
                 tuning.exposure(),
                 config.areaLightLimit,
-                lightGain);
+                lightGain,
+                hasUsableVoxelGrid,
+                beams);
+        // Skip the raymarch entirely when no uploaded light has in-scattering.
+        glUniform1i(uniforms.beamSteps(),
+                pointUpload.beamCount() + areaUpload.beamCount() > 0 ? beamSteps : 0);
+        boolean beamPassActive = pointUpload.beamCount() + areaUpload.beamCount() > 0;
+        glUniform1i(uniforms.beamShadows(),
+                hasUsableVoxelGrid && config.volumetricQuality >= LightRenderConfig.MAX_VOLUMETRIC_QUALITY ? 1 : 0);
+        glUniform1i(uniforms.beamPass(), 0);
         logPassState(
                 targetName,
-                uploadedPointCount,
-                uploadedAreaCount,
+                pointUpload.count(),
+                areaUpload.count(),
                 renderWidth,
                 renderHeight,
                 colorTexture,
                 depthTexture);
 
         glBindVertexArray(vertexArray);
-        glUniform1i(uniforms.firstPersonPass(), 0);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         logGlError("light draw " + targetName);
+
+        // Beam pass: same program and uniforms, half resolution, only the beam output (location 1) is written.
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, beamTexture, 0);
+        glDrawBuffers(new int[]{GL_NONE, GL_COLOR_ATTACHMENT1});
+        glViewport(0, 0, beamTextureWidth, beamTextureHeight);
+        glClear(GL_COLOR_BUFFER_BIT);
+        if (beamPassActive && glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            glUniform1i(uniforms.beamPass(), 1);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+            logGlError("beam draw " + targetName);
+        }
+        glViewport(0, 0, renderWidth, renderHeight);
 
         int compositeTexture = lightTexture;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
+        glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, 0, 0);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, 0);
         VilcGlStateSnapshot.unbindTexture2DFromAllUnits(compositeTexture, glState.activeTexture());
         VilcGlStateSnapshot.unbindTexture2DFromAllUnits(sceneCopyTexture, glState.activeTexture());
+        VilcGlStateSnapshot.unbindTexture2DFromAllUnits(beamTexture, glState.activeTexture());
 
         glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, glState.drawFramebuffer());
@@ -333,6 +376,10 @@ public final class VilcSceneLightCompositor {
         glBindTexture(GL_TEXTURE_2D, sceneCopyTexture);
         glUniform1i(compositeSceneTextureUniform, 1);
         glUniform1i(compositeUseSceneTextureUniform, 1);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_3D, 0);
+        glBindTexture(GL_TEXTURE_2D, beamTexture);
+        glUniform1i(compositeBeamTextureUniform, 2);
         glBindVertexArray(vertexArray);
         glDrawArrays(GL_TRIANGLES, 0, 3);
         logGlError("composite draw " + targetName);
@@ -343,6 +390,8 @@ public final class VilcSceneLightCompositor {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, 0);
         glBindTexture(GL_TEXTURE_3D, 0);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, 0);
 
         glState.restore();
     }
@@ -375,18 +424,25 @@ public final class VilcSceneLightCompositor {
             glDeleteTextures(sceneCopyTexture);
             sceneCopyTexture = 0;
         }
+        if (beamTexture != 0) {
+            glDeleteTextures(beamTexture);
+            beamTexture = 0;
+        }
         if (dummyBlockGridTexture != 0) {
             glDeleteTextures(dummyBlockGridTexture);
             dummyBlockGridTexture = 0;
         }
         lightTextureWidth = 0;
         lightTextureHeight = 0;
+        beamTextureWidth = 0;
+        beamTextureHeight = 0;
         attachedColorTexture = 0;
         glErrorLogged = false;
         uniforms = null;
         compositeLightTextureUniform = -1;
         compositeSceneTextureUniform = -1;
         compositeUseSceneTextureUniform = -1;
+        compositeBeamTextureUniform = -1;
         initializationFailed = false;
         hookLogged = false;
         targetsLogged = false;
@@ -441,6 +497,7 @@ public final class VilcSceneLightCompositor {
         compositeLightTextureUniform = glGetUniformLocation(compositeProgram, "uLightTexture");
         compositeSceneTextureUniform = glGetUniformLocation(compositeProgram, "uSceneTexture");
         compositeUseSceneTextureUniform = glGetUniformLocation(compositeProgram, "uUseSceneTexture");
+        compositeBeamTextureUniform = glGetUniformLocation(compositeProgram, "uBeamTexture");
     }
 
     private static int linkProgram(String name, String fragmentSource) {
@@ -449,6 +506,9 @@ public final class VilcSceneLightCompositor {
         int linkedProgram = glCreateProgram();
         glAttachShader(linkedProgram, vertexShader);
         glAttachShader(linkedProgram, fragmentShader);
+        // The light pass writes lighting and light beams into two attachments; unused names are ignored.
+        glBindFragDataLocation(linkedProgram, 0, "fragColor");
+        glBindFragDataLocation(linkedProgram, 1, "beamColor");
         glLinkProgram(linkedProgram);
         if (glGetProgrami(linkedProgram, GL_LINK_STATUS) == GL_FALSE) {
             VeilIrisLights.LOGGER.error("Failed to link Veil Iris {} shader: {}", name, glGetProgramInfoLog(linkedProgram));
@@ -460,6 +520,42 @@ public final class VilcSceneLightCompositor {
         return linkedProgram;
     }
 
+    /**
+     * Veil creates the voxel grid texture on first use with a client-memory glTexImage3D and does not reset the pixel
+     * unpack state. Inside Iris' pipeline a pixel unpack buffer or row/image skip values can still be set, so the
+     * driver read far outside the 64^3 byte upload and crashed (access violation in the driver when voxel shadows were
+     * switched on while a shaderpack was active). The unpack state is reset around the call and restored afterwards.
+     */
+    private static void setupVoxelGridWithCleanUnpackState() {
+        int unpackBuffer = glGetInteger(GL_PIXEL_UNPACK_BUFFER_BINDING);
+        int alignment = glGetInteger(GL_UNPACK_ALIGNMENT);
+        int rowLength = glGetInteger(GL_UNPACK_ROW_LENGTH);
+        int skipRows = glGetInteger(GL_UNPACK_SKIP_ROWS);
+        int skipPixels = glGetInteger(GL_UNPACK_SKIP_PIXELS);
+        int imageHeight = glGetInteger(GL_UNPACK_IMAGE_HEIGHT);
+        int skipImages = glGetInteger(GL_UNPACK_SKIP_IMAGES);
+        int texture3d = glGetInteger(GL_TEXTURE_BINDING_3D);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+        glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+        glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
+        glPixelStorei(GL_UNPACK_SKIP_IMAGES, 0);
+        try {
+            VoxelShadowGrid.setup();
+        } finally {
+            glBindTexture(GL_TEXTURE_3D, texture3d);
+            glPixelStorei(GL_UNPACK_SKIP_IMAGES, skipImages);
+            glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
+            glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
+            glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+            glBindBuffer(GL_PIXEL_UNPACK_BUFFER, unpackBuffer);
+        }
+    }
+
     private static boolean ensureLightTextures(int width, int height) {
         if (lightTexture == 0) {
             lightTexture = glGenTextures();
@@ -467,15 +563,27 @@ public final class VilcSceneLightCompositor {
         if (sceneCopyTexture == 0) {
             sceneCopyTexture = glGenTextures();
         }
+        if (beamTexture == 0) {
+            beamTexture = glGenTextures();
+        }
         int oldActiveTexture = glGetInteger(GL_ACTIVE_TEXTURE);
         boolean resize = lightTextureWidth != width || lightTextureHeight != height;
         setupLightTexture(lightTexture, width, height, resize);
         setupLightTexture(sceneCopyTexture, width, height, resize);
+        int beamWidth = Math.max(1, (width + 1) / 2);
+        int beamHeight = Math.max(1, (height + 1) / 2);
+        boolean beamResize = beamTextureWidth != beamWidth || beamTextureHeight != beamHeight;
+        setupLightTexture(beamTexture, beamWidth, beamHeight, beamResize);
+        // Beams are smooth fog: bilinear upsampling hides the half resolution.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         lightTextureWidth = width;
         lightTextureHeight = height;
+        beamTextureWidth = beamWidth;
+        beamTextureHeight = beamHeight;
         glBindTexture(GL_TEXTURE_2D, 0);
         glActiveTexture(oldActiveTexture);
-        return lightTexture != 0 && sceneCopyTexture != 0;
+        return lightTexture != 0 && sceneCopyTexture != 0 && beamTexture != 0;
     }
 
     private static void setupLightTexture(int texture, int width, int height, boolean resize) {
@@ -554,23 +662,6 @@ public final class VilcSceneLightCompositor {
         return shader;
     }
 
-    private static boolean hasOccludedLights(
-            Collection<? extends LightRenderHandle<PointLightData>> pointHandles,
-            Collection<? extends LightRenderHandle<AreaLightData>> areaHandles,
-            Collection<? extends LightRenderHandle<SpotLightData>> spotHandles) {
-        return anyOccluded(pointHandles) || anyOccluded(areaHandles) || anyOccluded(spotHandles);
-    }
-
-    private static boolean anyOccluded(Collection<? extends LightRenderHandle<? extends LightData>> handles) {
-        for (LightRenderHandle<? extends LightData> handle : handles) {
-            LightData light = handle.isValid() ? handle.getLightData() : null;
-            if (light instanceof DDALightData occludable && occludable.isOcclusionEnabled()) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     private static void logPassState(
             String targetName,
             int uploadedPointCount,
@@ -617,19 +708,39 @@ public final class VilcSceneLightCompositor {
 
             uniform sampler2D uSceneTexture;
             uniform sampler2D uLightTexture;
+            uniform sampler2D uBeamTexture;
             uniform bool uUseSceneTexture;
 
             in vec2 vTexCoord;
             out vec4 fragColor;
 
+            // The beams are raymarched at half resolution with a fixed dither per pixel; upscaled, the dither showed
+            // as a fine grid / snow pattern. Beams are soft fog, so a small blur (3x3 bilinear taps, about 6x6 beam
+            // texels) removes the pattern without visible loss of detail.
+            vec3 blurredBeam(vec2 texCoord) {
+                vec2 texel = 1.0 / vec2(textureSize(uBeamTexture, 0));
+                vec3 sum = vec3(0.0);
+                float weightSum = 0.0;
+                for (int y = -1; y <= 1; y++) {
+                    for (int x = -1; x <= 1; x++) {
+                        float weight = (x == 0 ? 2.0 : 1.0) * (y == 0 ? 2.0 : 1.0);
+                        sum += texture(uBeamTexture, texCoord + vec2(x, y) * texel * 1.5).rgb * weight;
+                        weightSum += weight;
+                    }
+                }
+                return sum / weightSum;
+            }
+
             void main() {
                 vec2 texCoord = clamp(vTexCoord, vec2(0.0), vec2(1.0));
                 vec4 light = texture(uLightTexture, texCoord);
+                vec3 beam = blurredBeam(texCoord);
                 if (uUseSceneTexture) {
                     vec4 scene = texture(uSceneTexture, texCoord);
-                    fragColor = vec4(scene.rgb * (vec3(1.0) + light.rgb), scene.a);
+                    // Surface light multiplies the scene; light beams are scattered light in the air and add on top.
+                    fragColor = vec4(scene.rgb * (vec3(1.0) + light.rgb) + beam, scene.a);
                 } else {
-                    fragColor = light;
+                    fragColor = vec4(light.rgb + beam, light.a);
                 }
             }
             """;
@@ -638,8 +749,18 @@ public final class VilcSceneLightCompositor {
 
             const int MAX_POINT_LIGHTS = 96;
             const int MAX_AREA_LIGHTS = 96;
+            const int MAX_BEAM_STEPS = 32;
+            const float SKY_DEPTH = 0.999999;
+            const float BEAM_MAX_DISTANCE = 48.0;
+            const float BEAM_DENSITY = 0.02;
+            const float MIN_VISIBLE_LIGHT = 0.002;
+            const float DETAILED_NORMAL_DISTANCE = 64.0;
+            const int FLAG_OCCLUDED = 1;
+            const int FLAG_SKIP_FIRST_PERSON = 2;
 
             uniform sampler2D uDepth;
+            uniform sampler2D uHandFreeDepth;
+            uniform bool uHasHandFreeDepth;
             uniform sampler3D uBlockGrid;
             uniform mat4 uInverseViewProjection;
             uniform vec3 uCameraPosition;
@@ -648,19 +769,22 @@ public final class VilcSceneLightCompositor {
             uniform vec2 uDepthUvScale;
             uniform vec3 uGridOrigin;
             uniform bool uHasBlockGrid;
-            uniform bool uDetailedNormals;
             uniform float uColorStrength;
             uniform float uColorSaturation;
             uniform float uNeutralLift;
             uniform float uLuminanceBoostLimit;
-            uniform bool uFirstPersonAdditiveEnabled;
-            uniform bool uFirstPersonPass;
+            uniform int uBeamSteps;
+            uniform bool uBeamShadows;
+            // false: full-resolution lighting pass; true: half-resolution light beam pass.
+            uniform bool uBeamPass;
 
             uniform int uPointCount;
+            uniform int uPointBeamCount;
             uniform vec4 uPointPositionRadius[MAX_POINT_LIGHTS];
             uniform vec4 uPointColor[MAX_POINT_LIGHTS];
 
             uniform int uAreaCount;
+            uniform int uAreaBeamCount;
             uniform vec4 uAreaPositionDistance[MAX_AREA_LIGHTS];
             uniform vec4 uAreaDirectionAngle[MAX_AREA_LIGHTS];
             uniform vec4 uAreaRightSize[MAX_AREA_LIGHTS];
@@ -670,6 +794,20 @@ public final class VilcSceneLightCompositor {
 
             in vec2 vTexCoord;
             out vec4 fragColor;
+            out vec4 beamColor;
+
+            // Color alpha = flags + 4 * round(inscattering * 256), see VilcLightBatch.
+            int lightFlags(float packedData) {
+                return int(packedData + 0.5) & 3;
+            }
+
+            float lightInscattering(float packedData) {
+                return float(int(packedData + 0.5) >> 2) / 256.0;
+            }
+
+            bool isFiniteVector(vec3 value) {
+                return !any(isnan(value)) && !any(isinf(value));
+            }
 
             float sampleDepth(vec2 texCoord) {
                 return texture(uDepth, clamp(texCoord, vec2(0.0), vec2(1.0)) * uDepthUvScale).r;
@@ -681,38 +819,81 @@ public final class VilcSceneLightCompositor {
                 return world.xyz / world.w + uCameraPosition;
             }
 
+            // Where the view rays actually start. View bobbing (and hurt shake) live in the projection matrix and
+            // move the eye away from the entity camera position while walking; using uCameraPosition as the ray
+            // origin made light beams swim around with every step. The eye is the projection centre, i.e. the
+            // point that maps to clip (0, 0, z, 0).
+            vec3 gEyePosition;
+
+            vec3 projectionEye() {
+                vec4 eye = uInverseViewProjection * vec4(0.0, 0.0, 1.0, 0.0);
+                if (abs(eye.w) < 1.0e-8) {
+                    return uCameraPosition;
+                }
+                vec3 position = eye.xyz / eye.w + uCameraPosition;
+                return isFiniteVector(position) ? position : uCameraPosition;
+            }
+
+            // Offset to a neighbouring surface pixel. Sky neighbours (holes in leaves, grass silhouettes) reconstruct
+            // to infinity or NaN, which used to turn the normal into NaN and the pixel black; they now count as
+            // "far away", so the opposite neighbour or the camera-facing fallback is used instead.
+            vec3 neighborOffset(vec2 texCoord, vec2 depthTexCoord, vec3 worldPosition) {
+                float depth = sampleDepth(depthTexCoord);
+                if (depth >= SKY_DEPTH) {
+                    return vec3(1.0e4);
+                }
+                vec3 offset = reconstructWorldPosition(texCoord, depth) - worldPosition;
+                return isFiniteVector(offset) ? offset : vec3(1.0e4);
+            }
+
+            // A neighbour on the same surface is roughly one pixel footprint away; a longer step is a depth edge
+            // (grass blade in front of the ground) and must not feed the normal.
+            bool isDepthEdge(vec3 offset, float cameraDistance) {
+                float limit = 0.05 + cameraDistance * 0.02;
+                return dot(offset, offset) > limit * limit;
+            }
+
             vec3 surfaceNormal(vec3 worldPosition, vec2 texCoord, vec2 depthTexCoord) {
                 // Screen-space derivatives must run in uniform control flow; evaluating them only for pixels
                 // beyond the detailed-normal range left a ring of broken normals at exactly that distance.
                 vec3 dx = dFdx(worldPosition);
                 vec3 dy = dFdy(worldPosition);
-                float cameraDistance = distance(worldPosition, uCameraPosition);
-                if (uDetailedNormals && cameraDistance < 48.0) {
+                float cameraDistance = distance(worldPosition, gEyePosition);
+                // Quad derivatives pair each pixel with one fixed neighbour. At depth edges that neighbour lies on
+                // another surface, which tilted the normal away from the light and left dashed dark outlines around
+                // foliage. Small steps (flower petals lying on grass) are too short for any distance threshold, so
+                // nearby pixels always take the closer of both neighbours; far away the threshold is good enough.
+                bool depthEdge = !isFiniteVector(dx) || !isFiniteVector(dy)
+                    || isDepthEdge(dx, cameraDistance) || isDepthEdge(dy, cameraDistance);
+                if (cameraDistance < DETAILED_NORMAL_DISTANCE || depthEdge) {
                     vec2 horizontalOffset = vec2(uInverseViewSize.x, 0.0);
                     vec2 verticalOffset = vec2(0.0, uInverseViewSize.y);
                     vec2 horizontalDepthOffset = vec2(uInverseDepthSize.x, 0.0);
                     vec2 verticalDepthOffset = vec2(0.0, uInverseDepthSize.y);
-                    vec3 left = reconstructWorldPosition(
-                        texCoord - horizontalOffset,
-                        sampleDepth(depthTexCoord - horizontalDepthOffset)) - worldPosition;
-                    vec3 right = reconstructWorldPosition(
-                        texCoord + horizontalOffset,
-                        sampleDepth(depthTexCoord + horizontalDepthOffset)) - worldPosition;
-                    vec3 down = reconstructWorldPosition(
-                        texCoord - verticalOffset,
-                        sampleDepth(depthTexCoord - verticalDepthOffset)) - worldPosition;
-                    vec3 up = reconstructWorldPosition(
-                        texCoord + verticalOffset,
-                        sampleDepth(depthTexCoord + verticalDepthOffset)) - worldPosition;
+                    vec3 left = neighborOffset(
+                        texCoord - horizontalOffset, depthTexCoord - horizontalDepthOffset, worldPosition);
+                    vec3 right = neighborOffset(
+                        texCoord + horizontalOffset, depthTexCoord + horizontalDepthOffset, worldPosition);
+                    vec3 down = neighborOffset(
+                        texCoord - verticalOffset, depthTexCoord - verticalDepthOffset, worldPosition);
+                    vec3 up = neighborOffset(
+                        texCoord + verticalOffset, depthTexCoord + verticalDepthOffset, worldPosition);
                     dx = dot(left, left) < dot(right, right) ? -left : right;
                     dy = dot(down, down) < dot(up, up) ? -down : up;
                 }
 
-                vec3 normal = normalize(cross(dx, dy));
-                if (length(dx) > 4.0 || length(dy) > 4.0) {
-                    normal = normalize(uCameraPosition - worldPosition);
+                vec3 towardCamera = normalize(gEyePosition - worldPosition);
+                // Both neighbours across an edge (one-pixel-wide blades): no usable surface, face the camera.
+                if (!isFiniteVector(dx) || !isFiniteVector(dy)
+                        || isDepthEdge(dx, cameraDistance) || isDepthEdge(dy, cameraDistance)) {
+                    return towardCamera;
                 }
-                if (dot(normal, uCameraPosition - worldPosition) < 0.0) {
+                vec3 crossed = cross(dx, dy);
+                if (dot(crossed, crossed) < 1.0e-12) {
+                    return towardCamera;
+                }
+                vec3 normal = normalize(crossed);
+                if (dot(normal, gEyePosition - worldPosition) < 0.0) {
                     normal = -normal;
                 }
                 vec3 absoluteNormal = abs(normal);
@@ -745,6 +926,18 @@ public final class VilcSceneLightCompositor {
                     ? 1.0 + boostRange * boostDelta / (boostRange + boostDelta)
                     : 1.0;
                 return hue * boost * peak;
+            }
+
+            // Compresses each light on its own before accumulation. Compressing only the summed vector kept the
+            // linear hue ratio of the sum, so in overlaps the closer light dominated completely while both lights
+            // already looked saturated on their own: red and blue split along a hard edge instead of mixing to
+            // magenta. For a single light this is identical to the previous summed compression.
+            vec3 compressedContribution(vec3 color, float amount) {
+                float strength = length(color) * 0.57735026919;
+                if (strength <= 0.0001 || amount <= 0.0) {
+                    return vec3(0.0);
+                }
+                return color * ((1.0 - exp(-strength * amount)) / strength);
             }
 
             vec3 applySaturation(vec3 color, float saturation) {
@@ -871,111 +1064,279 @@ public final class VilcSceneLightCompositor {
                 return visibility;
             }
 
-            void main() {
-                vec2 screenTexCoord = clamp(vTexCoord, vec2(0.0), vec2(1.0));
-                vec2 depthTexCoord = screenTexCoord;
-                float depth = sampleDepth(depthTexCoord);
-                if (depth >= 0.999999) {
-                    discard;
-                }
+            float pointFalloff(int i, vec3 position) {
+                float distanceToLight = length(uPointPositionRadius[i].xyz - position);
+                float falloff = 1.0 - smoothstep(0.0, 1.0, distanceToLight / uPointPositionRadius[i].w);
+                return falloff * falloff;
+            }
 
-                vec3 worldPosition = reconstructWorldPosition(screenTexCoord, depth);
-                bool firstPersonScreenRegion = screenTexCoord.y < 0.38
-                    && (screenTexCoord.x < 0.32 || screenTexCoord.x > 0.55);
-                bool firstPersonFragment = firstPersonScreenRegion
-                    && distance(worldPosition, uCameraPosition) < 0.42;
-                if (uFirstPersonAdditiveEnabled
-                        && ((uFirstPersonPass && !firstPersonFragment)
-                        || (!uFirstPersonPass && firstPersonFragment))) {
-                    discard;
+            // Per-channel weight (cone x distance falloff) of cone light i at a position. The channels only differ
+            // with a chromatic fringe: red reaches slightly further out than green, blue stops slightly earlier,
+            // like the edge of a simple lens. lightPosition receives the closest point on the emitter.
+            // pointEmitter: light beams shrink a round (spot) lens to its center point, a capsule lens to its center
+            // line; rectangles stay whole. With a round lens as an area, a beam
+            // sample just in front of it counted as fully inside the cone whatever the ray direction; for a light
+            // at the eye (flashlight) that single sample covered a whole step and left a dithered pattern of bright
+            // dots ("snow") all over the screen.
+            vec3 coneLightWeights(int i, vec3 position, bool pointEmitter, out vec3 lightPosition) {
+                vec3 areaCenter = uAreaPositionDistance[i].xyz;
+                vec3 right = normalize(uAreaRightSize[i].xyz);
+                vec3 up = normalize(uAreaUpSize[i].xyz);
+                vec3 relativePosition = position - areaCenter;
+                vec2 lensOffset = vec2(dot(relativePosition, right), dot(relativePosition, up));
+                if (uAreaShape[i].z > 0.5) {
+                    // Spot light lens: a disk, or a capsule (the disk swept along local x, e.g. a fluorescent
+                    // tube). Clamping per axis made a square emitter whose corners followed the light's roll, so
+                    // the beam looked square and rotated with the view direction. Beams (pointEmitter) shrink the
+                    // disk to its center line.
+                    float halfLength = uAreaShape[i].z - 1.0;
+                    vec2 onAxis = vec2(clamp(lensOffset.x, -halfLength, halfLength), 0.0);
+                    vec2 fromAxis = lensOffset - onAxis;
+                    float lensLength = length(fromAxis);
+                    float lensRadius = pointEmitter ? 0.0 : uAreaRightSize[i].w;
+                    if (lensLength > lensRadius) {
+                        fromAxis *= lensRadius / max(lensLength, 0.000001);
+                    }
+                    lensOffset = onAxis + fromAxis;
+                } else {
+                    lensOffset = clamp(
+                        lensOffset,
+                        -vec2(uAreaRightSize[i].w, uAreaUpSize[i].w),
+                        vec2(uAreaRightSize[i].w, uAreaUpSize[i].w));
                 }
-                vec3 normal = surfaceNormal(worldPosition, screenTexCoord, depthTexCoord);
-                vec3 lightSum = vec3(0.0);
+                lightPosition = areaCenter + right * lensOffset.x + up * lensOffset.y;
+
+                vec3 fromLight = position - lightPosition;
+                float distanceToLight = length(fromLight);
+                if (distanceToLight <= 0.0001) {
+                    return vec3(0.0);
+                }
+                float cone = dot(fromLight / distanceToLight, normalize(uAreaDirectionAngle[i].xyz));
+                float edge = uAreaDirectionAngle[i].w;
+                float edgeSoftness = max(uAreaShape[i].x, 0.0001);
+                float focus = max(uAreaShape[i].y, 0.05);
+                vec3 coneFalloff = vec3(1.0);
+                if (edge < -1.5) {
+                    // 360 degree area light: no cone, shines evenly all around its rectangle (line lights).
+                } else if (edge <= -0.999 && uAreaShape[i].z < 0.5) {
+                    // 180 degree area light: fade out towards the back like Veil does (smoothstep over the angle to
+                    // the normal). Two such lights back to back then add up to an even line light (L?YM! tube rows).
+                    coneFalloff = vec3(1.0 - smoothstep(0.0, 1.0, acos(clamp(cone, -1.0, 1.0)) / 3.14159265));
+                } else if (edge > -0.999) {
+                    float spread = uAreaShape[i].w * edgeSoftness * 1.5;
+                    vec3 edges = vec3(edge - spread, edge, edge + spread);
+                    vec3 tops = max(min(edges + edgeSoftness, vec3(1.0)), edges + 0.00001);
+                    coneFalloff = smoothstep(edges, tops, vec3(cone));
+                }
+                coneFalloff = pow(coneFalloff, vec3(focus));
+                float distanceFalloff = 1.0 - smoothstep(0.0, 1.0, distanceToLight / uAreaPositionDistance[i].w);
+                return coneFalloff * (distanceFalloff * distanceFalloff);
+            }
+
+            float interleavedGradientNoise(vec2 pixel) {
+                return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+            }
+
+            // Overlap of the view ray with a light's range sphere, clipped to [0, rayLength].
+            bool beamInterval(vec3 rayDirection, float rayLength, vec3 center, float radius,
+                              out float rayStart, out float rayEnd) {
+                vec3 toCenter = center - gEyePosition;
+                float along = dot(toCenter, rayDirection);
+                float closestSquared = dot(toCenter, toCenter) - along * along;
+                float radiusSquared = radius * radius;
+                rayStart = 0.0;
+                rayEnd = 0.0;
+                if (closestSquared >= radiusSquared) {
+                    return false;
+                }
+                float halfChord = sqrt(radiusSquared - closestSquared);
+                rayStart = max(along - halfChord, 0.0);
+                rayEnd = min(along + halfChord, rayLength);
+                return rayEnd > rayStart;
+            }
+
+            // Light scattered towards the camera by the air along the view ray, up to the surface (or a fixed
+            // distance for the sky). Each light is only sampled where the ray passes through its range, so the
+            // steps are spent where the beam actually is; dithered offsets hide the banding of the few steps.
+            // Voxel shadows inside beams are expensive (steps x lights x DDA) and only run on High quality.
+            vec3 lightBeams(vec2 texCoord, float surfaceDistance) {
+                vec3 rayDirection = normalize(reconstructWorldPosition(texCoord, 0.5) - gEyePosition);
+                float rayLength = surfaceDistance < 0.0
+                    ? BEAM_MAX_DISTANCE
+                    : min(surfaceDistance, BEAM_MAX_DISTANCE);
+                if (!(rayLength > 0.01) || !isFiniteVector(rayDirection)) {
+                    return vec3(0.0);
+                }
+                float jitter = interleavedGradientNoise(gl_FragCoord.xy);
+                float steps = float(uBeamSteps);
+                vec3 scattered = vec3(0.0);
 
                 for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
-                    if (i >= uPointCount) {
+                    if (i >= uPointBeamCount) {
                         break;
                     }
-                    vec3 delta = uPointPositionRadius[i].xyz - worldPosition;
-                    float radius = uPointPositionRadius[i].w;
-                    float distanceToLight = length(delta);
-                    if (distanceToLight <= 0.0001) {
+                    vec3 lightPosition = uPointPositionRadius[i].xyz;
+                    float rayStart;
+                    float rayEnd;
+                    if (!beamInterval(rayDirection, rayLength, lightPosition, uPointPositionRadius[i].w,
+                            rayStart, rayEnd)) {
                         continue;
                     }
-                    float falloff = smoothstep(1.0, 0.0, distanceToLight / radius);
-                    falloff *= falloff;
-                    if (falloff <= 0.0) {
-                        continue;
+                    float stepLength = (rayEnd - rayStart) / steps;
+                    bool occluded = uBeamShadows && (lightFlags(uPointColor[i].a) & FLAG_OCCLUDED) != 0;
+                    float amount = 0.0;
+                    for (int beamStep = 0; beamStep < MAX_BEAM_STEPS; beamStep++) {
+                        if (beamStep >= uBeamSteps) {
+                            break;
+                        }
+                        vec3 samplePosition = gEyePosition
+                            + rayDirection * (rayStart + stepLength * (float(beamStep) + jitter));
+                        float falloff = pointFalloff(i, samplePosition);
+                        if (falloff <= 0.0) {
+                            continue;
+                        }
+                        amount += falloff * shadowVisibility(samplePosition, vec3(0.0), lightPosition, occluded);
                     }
-                    vec3 directionToLight = delta / distanceToLight;
-                    float surface = surfaceResponse(normal, directionToLight);
-                    if (surface <= 0.0) {
-                        continue;
-                    }
-                    float visibility = shadowVisibility(
-                        worldPosition,
-                        normal,
-                        uPointPositionRadius[i].xyz,
-                        uPointColor[i].a > 0.5
-                    );
-                    lightSum += normalizeLightColor(uPointColor[i].rgb)
-                        * falloff * surface * visibility;
+                    scattered += normalizeLightColor(uPointColor[i].rgb)
+                        * (lightInscattering(uPointColor[i].a) * amount * stepLength);
                 }
 
                 for (int i = 0; i < MAX_AREA_LIGHTS; i++) {
-                    if (i >= uAreaCount) {
+                    if (i >= uAreaBeamCount) {
                         break;
                     }
-                    vec3 areaCenter = uAreaPositionDistance[i].xyz;
-                    vec3 right = normalize(uAreaRightSize[i].xyz);
-                    vec3 up = normalize(uAreaUpSize[i].xyz);
-                    vec3 relativePosition = worldPosition - areaCenter;
-                    vec3 lightPosition = areaCenter
-                        + right * clamp(
-                            dot(relativePosition, right),
-                            -uAreaRightSize[i].w,
-                            uAreaRightSize[i].w)
-                        + up * clamp(
-                            dot(relativePosition, up),
-                            -uAreaUpSize[i].w,
-                            uAreaUpSize[i].w);
-                    vec3 fromLight = worldPosition - lightPosition;
-                    float distanceToLight = length(fromLight);
-                    float distanceLimit = uAreaPositionDistance[i].w;
-                    if (distanceToLight <= 0.0001) {
+                    float lensReach = max(uAreaRightSize[i].w, uAreaUpSize[i].w)
+                        + (uAreaShape[i].z > 0.5 ? uAreaShape[i].z - 1.0 : 0.0);
+                    float rayStart;
+                    float rayEnd;
+                    if (!beamInterval(rayDirection, rayLength, uAreaPositionDistance[i].xyz,
+                            uAreaPositionDistance[i].w + lensReach, rayStart, rayEnd)) {
                         continue;
                     }
-                    vec3 direction = normalize(fromLight);
-                    float cone = dot(direction, normalize(uAreaDirectionAngle[i].xyz));
-                    float edge = uAreaDirectionAngle[i].w;
-                    float edgeSoftness = max(uAreaShape[i].x, 0.0001);
-                    float focus = max(uAreaShape[i].y, 0.05);
-                    float coneFalloff = edge <= -0.999
-                        ? 1.0
-                        : smoothstep(edge, min(edge + edgeSoftness, 1.0), cone);
-                    coneFalloff = pow(coneFalloff, focus);
-                    float distanceFalloff = smoothstep(1.0, 0.0, distanceToLight / distanceLimit);
-                    if (coneFalloff <= 0.0 || distanceFalloff <= 0.0) {
-                        continue;
+                    float stepLength = (rayEnd - rayStart) / steps;
+                    bool occluded = uBeamShadows && (lightFlags(uAreaColor[i].a) & FLAG_OCCLUDED) != 0;
+                    vec3 amount = vec3(0.0);
+                    for (int beamStep = 0; beamStep < MAX_BEAM_STEPS; beamStep++) {
+                        if (beamStep >= uBeamSteps) {
+                            break;
+                        }
+                        vec3 samplePosition = gEyePosition
+                            + rayDirection * (rayStart + stepLength * (float(beamStep) + jitter));
+                        vec3 lightPosition;
+                        vec3 weights = coneLightWeights(i, samplePosition, true, lightPosition);
+                        if (max(weights.r, max(weights.g, weights.b)) <= 0.0) {
+                            continue;
+                        }
+                        amount += weights * shadowVisibility(samplePosition, vec3(0.0), lightPosition, occluded);
                     }
-                    vec3 directionToLight = -direction;
-                    float surface = surfaceResponse(normal, directionToLight);
-                    if (surface <= 0.0) {
-                        continue;
-                    }
-                    float visibility = shadowVisibility(
-                        worldPosition,
-                        normal,
-                        lightPosition,
-                        uAreaColor[i].a > 0.5
-                    );
-                    lightSum += normalizeLightColor(uAreaColor[i].rgb)
-                        * coneFalloff * distanceFalloff * distanceFalloff
-                        * surface * visibility;
+                    scattered += normalizeLightColor(uAreaColor[i].rgb) * amount
+                        * (lightInscattering(uAreaColor[i].a) * stepLength);
                 }
 
+                scattered *= BEAM_DENSITY;
+                vec3 beam = vec3(1.0) - exp(-scattered);
+                return isFiniteVector(beam) ? beam : vec3(0.0);
+            }
+
+            void main() {
+                gEyePosition = projectionEye();
+                vec2 screenTexCoord = clamp(vTexCoord, vec2(0.0), vec2(1.0));
+                float depth = sampleDepth(screenTexCoord);
+                bool sky = depth >= SKY_DEPTH;
+                if (uBeamPass) {
+                    // Half-resolution beam pass: only the air between the eye and the surface matters here.
+                    fragColor = vec4(0.0);
+                    vec3 beam = vec3(0.0);
+                    if (uBeamSteps > 0) {
+                        vec3 surfacePosition = reconstructWorldPosition(screenTexCoord, min(depth, SKY_DEPTH));
+                        beam = lightBeams(screenTexCoord, sky ? -1.0 : distance(surfacePosition, gEyePosition));
+                    }
+                    beamColor = vec4(beam, 0.0);
+                    return;
+                }
+                // Computed for every pixel (sky included) so the derivatives in surfaceNormal stay in uniform flow.
+                vec3 worldPosition = reconstructWorldPosition(screenTexCoord, min(depth, SKY_DEPTH));
+                vec3 normal = surfaceNormal(worldPosition, screenTexCoord, screenTexCoord);
+                // Hand and held item: closer than the depth Iris captured right before drawing the hand.
+                bool firstPerson = uHasHandFreeDepth && !sky
+                    && depth < texture(uHandFreeDepth, screenTexCoord * uDepthUvScale).r - 0.000001;
+                vec3 lightSum = vec3(0.0);
+
+                if (!sky) {
+                    for (int i = 0; i < MAX_POINT_LIGHTS; i++) {
+                        if (i >= uPointCount) {
+                            break;
+                        }
+                        int flags = lightFlags(uPointColor[i].a);
+                        if (firstPerson && (flags & FLAG_SKIP_FIRST_PERSON) != 0) {
+                            continue;
+                        }
+                        vec3 delta = uPointPositionRadius[i].xyz - worldPosition;
+                        float distanceToLight = length(delta);
+                        if (distanceToLight <= 0.0001) {
+                            continue;
+                        }
+                        float falloff = pointFalloff(i, worldPosition);
+                        if (falloff <= 0.0) {
+                            continue;
+                        }
+                        float surface = surfaceResponse(normal, delta / distanceToLight);
+                        vec3 lightColor = normalizeLightColor(uPointColor[i].rgb);
+                        // Below ~0.2 % the light is invisible; skip it before paying for the shadow ray.
+                        if (length(lightColor) * 0.57735026919 * falloff * surface < MIN_VISIBLE_LIGHT) {
+                            continue;
+                        }
+                        float visibility = shadowVisibility(
+                            worldPosition,
+                            normal,
+                            uPointPositionRadius[i].xyz,
+                            (flags & FLAG_OCCLUDED) != 0);
+                        lightSum += compressedContribution(lightColor, falloff * surface * visibility);
+                    }
+
+                    for (int i = 0; i < MAX_AREA_LIGHTS; i++) {
+                        if (i >= uAreaCount) {
+                            break;
+                        }
+                        int flags = lightFlags(uAreaColor[i].a);
+                        if (firstPerson && (flags & FLAG_SKIP_FIRST_PERSON) != 0) {
+                            continue;
+                        }
+                        vec3 lightPosition;
+                        vec3 weights = coneLightWeights(i, worldPosition, false, lightPosition);
+                        float peakWeight = max(weights.r, max(weights.g, weights.b));
+                        if (peakWeight <= 0.0) {
+                            continue;
+                        }
+                        vec3 toLight = lightPosition - worldPosition;
+                        float distanceToLight = length(toLight);
+                        if (distanceToLight <= 0.0001) {
+                            continue;
+                        }
+                        float surface = surfaceResponse(normal, toLight / distanceToLight);
+                        vec3 lightColor = normalizeLightColor(uAreaColor[i].rgb);
+                        if (length(lightColor) * 0.57735026919 * peakWeight * surface < MIN_VISIBLE_LIGHT) {
+                            continue;
+                        }
+                        float visibility = shadowVisibility(
+                            worldPosition,
+                            normal,
+                            lightPosition,
+                            (flags & FLAG_OCCLUDED) != 0);
+                        lightSum += compressedContribution(lightColor, peakWeight * surface * visibility)
+                            * (weights / peakWeight);
+                    }
+                }
+                if (!isFiniteVector(lightSum)) {
+                    lightSum = vec3(0.0);
+                }
+
+                // Lights are already compressed individually, so a single light stays below 1. Only overlapping
+                // lights get a soft shoulder above 1 (C1-continuous at the knee) to keep stacked lights bounded.
                 float energy = length(lightSum) * 0.57735026919;
-                float intensity = 1.0 - exp(-energy);
+                float intensity = energy <= 1.0
+                    ? energy
+                    : 2.0 - exp(1.0 - energy);
                 vec3 compressedLight = energy > 0.0001
                     ? lightSum * (intensity / energy)
                     : vec3(0.0);
@@ -985,6 +1346,7 @@ public final class VilcSceneLightCompositor {
                 coloredLift = applySaturation(coloredLift, uColorSaturation);
                 vec3 neutralLift = vec3(1.0 - exp(-intensity * uNeutralLift));
                 fragColor = vec4(coloredLift + neutralLift, 0.0);
+                beamColor = vec4(0.0);
             }
             """;
 }

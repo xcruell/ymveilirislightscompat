@@ -3,11 +3,12 @@ package com.yesmenn.veilirislights.compat.veil.mixin;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.yesmenn.veilirislights.api.VeilIrisLightOcclusion;
 import com.yesmenn.veilirislights.compat.veil.VoxelShadowGridState;
+import com.yesmenn.veilirislights.config.LightRenderConfig;
 import foundry.veil.api.client.registry.LightTypeRegistry;
 import foundry.veil.api.client.render.VeilRenderSystem;
-import foundry.veil.api.client.render.light.data.AreaLightData;
-import foundry.veil.api.client.render.light.data.SpotLightData;
-import foundry.veil.api.client.render.light.data.PointLightData;
+import foundry.veil.api.client.render.light.DDALightData;
+import foundry.veil.api.client.render.light.data.LightData;
+import foundry.veil.api.client.registry.LightTypeRegistry.LightType;
 import foundry.veil.api.client.render.light.renderer.LightRenderHandle;
 import foundry.veil.impl.client.render.light.VoxelShadowGrid;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -72,35 +73,26 @@ public abstract class MixinVoxelShadowGrid {
 
     @Inject(method = "hasOccludedLights", at = @At("HEAD"), cancellable = true)
     private static void veilIrisLights$detectCompatLights(CallbackInfoReturnable<Boolean> cir) {
-        for (LightRenderHandle<PointLightData> handle :
-                VeilRenderSystem.renderer().getLightRenderer().getLights(LightTypeRegistry.POINT.get())) {
-            if (handle.isValid()
-                    && handle.getLightData() != null
-                    && handle.getLightData().isOcclusionEnabled()) {
-                cir.setReturnValue(true);
-                return;
-            }
+        // With VILC voxel shadows enabled every light is shadowed, so the grid is needed whenever any light exists,
+        // even if the light itself has Veil occlusion disabled.
+        boolean forceShadows = LightRenderConfig.get().voxelShadows;
+        if (veilIrisLights$needsGrid(LightTypeRegistry.POINT.get(), forceShadows)
+                || veilIrisLights$needsGrid(LightTypeRegistry.AREA.get(), forceShadows)
+                || veilIrisLights$needsGrid(LightTypeRegistry.SPOT.get(), forceShadows)) {
+            cir.setReturnValue(true);
         }
+    }
 
-        for (LightRenderHandle<AreaLightData> handle :
-                VeilRenderSystem.renderer().getLightRenderer().getLights(LightTypeRegistry.AREA.get())) {
-            if (handle.isValid()
-                    && handle.getLightData() != null
-                    && handle.getLightData().isOcclusionEnabled()) {
-                cir.setReturnValue(true);
-                return;
+    @Unique
+    private static <T extends LightData> boolean veilIrisLights$needsGrid(LightType<T> type, boolean forceShadows) {
+        for (LightRenderHandle<T> handle : VeilRenderSystem.renderer().getLightRenderer().getLights(type)) {
+            LightData light = handle.isValid() ? handle.getLightData() : null;
+            if (light != null && (forceShadows
+                    || light instanceof DDALightData occludable && occludable.isOcclusionEnabled())) {
+                return true;
             }
         }
-
-        for (LightRenderHandle<SpotLightData> handle :
-                VeilRenderSystem.renderer().getLightRenderer().getLights(LightTypeRegistry.SPOT.get())) {
-            if (handle.isValid()
-                    && handle.getLightData() != null
-                    && handle.getLightData().isOcclusionEnabled()) {
-                cir.setReturnValue(true);
-                return;
-            }
-        }
+        return false;
     }
 
     @Inject(method = "setup", at = @At("RETURN"))

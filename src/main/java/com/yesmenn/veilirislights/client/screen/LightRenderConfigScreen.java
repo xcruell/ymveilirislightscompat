@@ -66,19 +66,28 @@ public final class LightRenderConfigScreen extends Screen {
                 },
                 true));
         this.addRenderableWidget(Button.builder(
-                toggleLabel("option.veil_iris_lights.detailed_normals", config.detailedNormals),
-                button -> {
-                    config.detailedNormals = !config.detailedNormals;
-                    config.markCustom();
-                    this.rebuildWidgets();
-                }).bounds(left, controlsY + 52, COLUMN_WIDTH, 20).build());
-        this.addRenderableWidget(Button.builder(
                 toggleLabel("option.veil_iris_lights.voxel_shadows", config.voxelShadows),
                 button -> {
                     config.voxelShadows = !config.voxelShadows;
                     config.markCustom();
                     this.rebuildWidgets();
+                }).bounds(left, controlsY + 52, COLUMN_WIDTH, 20).build());
+        this.addRenderableWidget(Button.builder(
+                toggleLabel("option.veil_iris_lights.volumetric_beams", config.volumetricBeams),
+                button -> {
+                    config.volumetricBeams = !config.volumetricBeams;
+                    this.rebuildWidgets();
                 }).bounds(left, controlsY + 78, COLUMN_WIDTH, 20).build());
+        Button volumetricQuality = Button.builder(
+                volumetricLabel(config),
+                button -> {
+                    config.volumetricQuality = config.volumetricQuality >= LightRenderConfig.MAX_VOLUMETRIC_QUALITY
+                            ? LightRenderConfig.MIN_VOLUMETRIC_QUALITY
+                            : config.volumetricQuality + 1;
+                    this.rebuildWidgets();
+                }).bounds(left, controlsY + 104, COLUMN_WIDTH, 20).build();
+        volumetricQuality.active = config.volumetricBeams;
+        this.addRenderableWidget(volumetricQuality);
 
         int right = left + COLUMN_WIDTH + 10;
         this.addRenderableWidget(new ConfigSlider(
@@ -115,6 +124,12 @@ public final class LightRenderConfigScreen extends Screen {
         return Component.translatable(
                 "option.veil_iris_lights.quality",
                 Component.translatable(config.quality.translationKey()));
+    }
+
+    private static Component volumetricLabel(LightRenderConfig config) {
+        return Component.translatable(
+                "option.veil_iris_lights.volumetric",
+                Component.translatable("option.veil_iris_lights.volumetric." + config.volumetricQuality));
     }
 
     private static Component toggleLabel(String key, boolean enabled) {

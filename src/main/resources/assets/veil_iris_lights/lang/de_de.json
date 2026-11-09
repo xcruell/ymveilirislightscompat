@@ -10,11 +10,15 @@
   "option.veil_iris_lights.quality.custom": "Benutzerdefiniert",
   "option.veil_iris_lights.point_lights": "Punktlichter: %s",
   "option.veil_iris_lights.area_lights": "Flächenlichter: %s",
-  "option.veil_iris_lights.detailed_normals": "Detaillierte Normalen: %s",
   "option.veil_iris_lights.voxel_shadows": "Voxel-Schatten: %s",
   "option.veil_iris_lights.exposure": "Belichtungsstärke: %s",
   "option.veil_iris_lights.color_strength": "Farbstärke: %s",
   "option.veil_iris_lights.color_saturation": "Farbsättigung: %s",
   "option.veil_iris_lights.neutral_lift": "Neutrale Helligkeit: %s",
-  "option.veil_iris_lights.luminance_limit": "Farbhelligkeits-Limit: %s"
+  "option.veil_iris_lights.luminance_limit": "Farbhelligkeits-Limit: %s",
+  "option.veil_iris_lights.volumetric_beams": "Lichtschein: %s",
+  "option.veil_iris_lights.volumetric": "Lichtschein-Qualität: %s",
+  "option.veil_iris_lights.volumetric.1": "Niedrig",
+  "option.veil_iris_lights.volumetric.2": "Mittel",
+  "option.veil_iris_lights.volumetric.3": "Hoch"
 }

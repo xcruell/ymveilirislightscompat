@@ -1,0 +1,423 @@
+# Veil Iris Lights Compat
+
+## Version 1.6.1 - Added line lights and capsule lenses, full-area light beams
+
+### Added
+
+- Long spot-light lenses: AreaLightShapeRegistry.set(SpotLightData, focus, lensRadius, lensHalfLength) stretches the round lens into a capsule along the light's local x axis (e.g. fluorescent tubes); surfaces and light beams are lit from the whole length
+- Area lights with an angle of 360 degrees (2 pi) shine evenly in every direction from their rectangle, so a line light needs one light instead of two back-to-back 180 degree lights
+
+### Changed
+
+- Area lights with a 180 degree angle now fade out towards their back like in Veil's own renderer (smooth falloff over the angle to the normal) instead of shining fully in every direction; two of them back to back form an even line light (used by L?YM! for rows of light tubes)
+- Light beams of area lights now come from their whole rectangle (before: from its center point); round spot lenses still shrink to their center for beams (see the flashlight snow fix), capsule lenses to their center line
+
+## Version 1.6.0 - Added spot lights and light beams, fixed outlines and a crash
+
+### Added
+
+- Veil spot lights (SpotLightData) are now rendered with Iris shaderpacks and in the fallback pass, including voxel occlusion. They share the area-light budget
+- Optional spot-light shaping for addons: AreaLightShapeRegistry.set(SpotLightData, focus, lensRadius) adds beam focus and a lens radius; the soft edge comes from Veil's own spot angle
+- Light beams: Veil's in-scattering strength (point, area and spot lights) is now rendered as visible light in the air, with voxel shadows and dithered raymarching. New "Light beams" on/off toggle and "Light beam quality" option (Low/Medium/High = 8/16/32 steps, default on and Medium); costs nothing when no light has in-scattering
+- Light extras API for addons: AreaLightShapeRegistry.setExtras(LightData, skipFirstPerson, chromaticFringe) lets a light skip the first-person hand/held item (e.g. flashlights) and adds a chromatic fringe at the cone edge
+
+### Changed
+
+- The voxel shadow option is now a master switch: when enabled, every Veil light casts voxel shadows regardless of its own occlusion flag (light mods often leave it off, so the option appeared to do nothing)
+- Spot-light lenses are round: the lens radius used to clamp to a square whose corners followed the light's roll, so beams looked square and rotated with the view direction
+- Removed the "Detailed normals" option: since the depth-edge fixes it made no visible difference. Normals now always use the precise neighbour sampling within 64 blocks; its slot in the settings screen holds the new light beam toggle
+- Light beams are raymarched in a separate half-resolution pass (same shader, beam output only) and upsampled bilinearly in the composite: about a quarter of the beam cost, which matters for wide, long-range lights (e.g. a 64 block hanging lamp). The full-resolution lighting pass no longer computes beams
+- First-person hand detection now compares against Iris' pre-hand depth buffer (pixel exact) instead of a fixed screen region; lights other than skipFirstPerson lights now light the hand
+
+### Fixed
+
+- Overlapping colored lights mix properly (red + blue = magenta etc.): each light is now compressed on its own before accumulation instead of compressing only the sum, which let the closer light dominate the hue completely and split overlaps along a hard edge. Single lights look unchanged
+- Fixed black pixels around foliage, leaves and grass with shaderpacks: neighbouring sky pixels reconstructed to infinite positions and turned the surface normal into NaN
+- Fixed dashed dark outlines along depth edges (grass blades, flowers, leaves in front of the ground), mainly with detailed normals off: the screen-space derivatives paired edge pixels with a neighbour on another surface, tilting the normal away from the light. Depth edges are now detected relative to the pixel footprint and use the closer neighbour (or a camera-facing normal for one-pixel-wide blades)
+- Large FPS drops with active Veil lights:
+  - Light beams only raymarch where the view ray passes through a light's range instead of along the whole ray for every light
+  - Voxel shadows inside light beams only run on "High" beam quality (they cost steps x lights x shadow ray per pixel)
+  - Surface lighting skips the shadow ray for light contributions below ~0.2 % (invisible fringes of a light's range)
+- Remaining dark outlines around small depth steps (flower petals on grass, blade bottoms), which were too short for the edge threshold: within 64 blocks normals now always use the closer of both neighbours
+- Light beams swimming around while walking, also for static spotlights: the beam rays started at the camera position without view bobbing, while the scene is rendered with it. Rays now start at the real eye position taken from the projection
+- White "snow" (a dithered pattern of bright dots, most visible in the sky) with a flashlight: light beams sampled spot lights with their lens as an area, so a beam sample just in front of a lens at the eye counted as fully inside the cone regardless of the view direction and covered a whole raymarch step. Beams now use the lens center as a point emitter; surface lighting keeps the area lens
+- Visible grid / snow pattern inside and around light beams: the beam dither, upscaled from the half-resolution beam pass, formed a regular pattern (most visible on Low quality). The composite now blurs the beams slightly (3x3 bilinear taps), which removes the pattern; beams are soft fog, so no detail is lost
+- Crash (access violation in the graphics driver) when enabling voxel shadows while a shaderpack is active: Veil creates the voxel grid texture on first use with a client-memory upload and does not reset the pixel unpack state, which Iris' pipeline can leave with a bound unpack buffer or skip values. VILC now resets the unpack state around the voxel grid setup and restores it afterwards
+
+## Version 1.5.1 - Veil 4.5.2, stronger colors, fixed magenta checkerboard
+
+### Changed
+
+- Updated to Veil 4.5.2 (minimum required version)
+- Shaderpack detection now uses the official Iris API
+- License metadata set to the YesMenn Custom License 1.0
+- Built against Sodium 0.8.13 (minimum stays 0.8.12-beta.1); Iris 1.8.14-beta.1 is still the latest for 1.21.1
+- Addons can register a combined config screen (ConfigScreenBridge.registerCombinedScreen); the mod list entry and config key then open it
+- Removed the now unused resolved-light texture (one less full-screen RGBA16F texture)
+- Removed the unused bundled glsl-transformer library
+- Corrected mod descriptions: VILC renders Veil point and area lights and no longer runs Veil shader programs through Iris
+
+### Fixed
+
+- Fixed a thin dark ring around the player at 48 blocks: surface-normal derivatives were evaluated in non-uniform control flow at the detailed-normals range boundary
+- Saturated light colors are much stronger with shaderpacks: the shaderpack pass now composites from a scene copy like the vanilla pass instead of GL blending into the 8-bit target, which clamped the light term and capped colored light at 2x the scene color
+- Fixed the full-screen magenta checkerboard and magenta first-person hand with Iris installed: Veil's own deferred light pass is skipped while Veil keeps its albedo buffer disabled under Iris; VILC renders the lights instead
+- Guarded voxel-occlusion light checks against Veil light handles without light data
+
+## Version 1.4.14 - Fixed lost green light and unlit spots on first-person items
+
+### Fixed
+
+- Replaced per-channel destination-color light blending with screen-style blending so green light remains visible on red or low-green first-person item textures
+- Removed the screen-space first-person filter that could leave rectangular unlit areas around the hand and held item
+
+## Version 1.4.13 - Reworked the hand light filter against magenta tint
+
+### Fixed
+
+- Reworked the shaderpack first-person hand and held-item light filter to avoid magenta-only white light tint when green contribution is lost on the item layer
+
+## Version 1.4.12 - Fixed magenta tint from white lights on the hand
+
+### Fixed
+
+- Tightened the shaderpack first-person hand and held-item light filter so white lights no longer leave magenta-only tint from missing green contribution
+
+## Version 1.4.11 - Restored texture detail, reduced stripes with shaderpacks
+
+### Changed
+
+- Restored texture-aware shaderpack light blending so bright lights color existing surfaces instead of covering block texture detail
+- Smoothed shaderpack light falloff and reduced distant surface-normal artifacts that could create hard stripe patterns
+
+### Fixed
+
+- Reduced first-person hand and held-item tinting from nearby shaderpack lights without reintroducing the broad near-camera unlit bubble
+
+## Version 1.4.10 - Fixed backwards area lights and magenta tint near the camera
+
+### Fixed
+
+- Fixed Veil/Nox area lights rendering in the opposite direction in the Iris shaderpack pass
+- Reduced magenta first-person and screen overlay tinting from nearby visible area-light glow surfaces
+
+## Version 1.4.9 - Fixed over-tinted hands and held items near white lights
+
+### Fixed
+
+- Fixed first-person hands and held items being over-tinted by nearby white VILC lights
+- The shaderpack light pass now skips extremely near-camera fragments so world lighting does not affect first-person item rendering
+
+## Version 1.4.6 - Restored fallback pass, fixed Colored Lights disappearing
+
+### Changed
+
+- Restored the non-shaderpack light fallback pass for setups where Veil lights need VILC to appear on the main world target
+- The non-shaderpack fallback pass now reads YesMenn Colored Light render settings when YesMenn is installed
+
+### Fixed
+
+- Fixed Colored Lights disappearing without shaderpacks after separating the YesMenn and VILC config panels
+- Fixed VILC shader settings affecting normal non-shaderpack world lighting
+
+## Version 1.4.5 - Limited VILC color settings to shaderpack rendering
+
+### Changed
+
+- VILC no longer renders its normal main-world light pass while shaderpacks are disabled
+- VILC color tuning is now limited to shaderpack rendering and Vista live-feed rendering
+
+### Fixed
+
+- Fixed VILC color settings also affecting normal non-shaderpack Colored Lights when YesMenn provides its own Veil tuning
+
+Veil Iris Lights Compat bridges Veil rendering and dynamic lights into the
+active Iris shaderpack pipeline on NeoForge.
+
+Veil effects normally render outside a shaderpack's G-buffer and may disappear,
+use incorrect depth information, or fail to contribute light while Iris shaders
+are enabled. This mod translates Veil shader programs for Iris and provides a
+dedicated shaderpack-compatible pass for Veil point and area lights.
+
+## Features
+
+- Renders Veil shader effects through the active Iris shaderpack pipeline.
+- Injects Veil vertex and fragment behavior into compatible Iris G-buffer programs.
+- Preserves shaderpack depth, albedo, fog, and render-target behavior where possible.
+- Supports opaque and translucent Veil effects.
+- Uses Iris `EntitiesTrans` programs for translucent effects when available.
+- Provides screen-door dithering as a fallback for shaderpacks without a suitable translucent program.
+- Supports Veil effects in Iris shadow-map rendering.
+- Automatically rebuilds and caches translated shaders after shaderpack reloads.
+- Adds shaderpack-compatible Veil point lights.
+- Adds shaderpack-compatible Veil area and cone lights.
+- Supports multiple differently colored lights and additive color mixing.
+- Applies perceptual color normalization so red, green, and blue lights have more consistent perceived brightness.
+- Reconstructs world positions from the shaderpack depth buffer.
+- Reconstructs surface normals for angle-dependent diffuse lighting.
+- Supports distance attenuation and area-light cone attenuation.
+- Supports voxel-based light occlusion and block shadows.
+- Supports solid blocks and partially transmissive leaves as voxel shadow casters.
+- Uses tone-mapped light contribution to preserve surface texture under bright or overlapping lights.
+- Includes an in-game light-rendering configuration screen.
+- Includes Performance, Balanced, and High rendering-quality presets.
+- Configuration can be opened with `O` by default or from the mod list.
+- Exposure, color strength, neutral brightness, and color luminance normalization can be adjusted live.
+- Color saturation can be adjusted independently from brightness and exposure.
+- Exposure can be adjusted up to 2.00 and color strength up to 12.00.
+- Adds live Compat pass diagnostics to the F3 debug screen.
+- Configuration is saved to `config/veil_iris_lights.json`.
+- Automatically supports standard Veil point and area lights created by other mods.
+- Provides tag and Java API hooks for non-occluding light-source blocks.
+- Keeps non-shaderpack world lighting on the normal Veil/YesMenn path.
+
+## Requirements
+
+- Minecraft 1.21.1
+- NeoForge 21.1.228 or newer
+- Iris 1.8.14 beta 1 or newer
+- Veil 4.1.4 or newer
+- Sodium 0.8.12 beta 1 or newer
+
+## Compatibility Notes
+
+- Shaderpacks differ significantly internally. The mod uses Iris G-buffer
+  programs and common render targets, but unusual shaderpack layouts may still
+  require compatibility work.
+- Voxel shadows use a camera-centered 64 x 64 x 64 block grid.
+- Voxel shadows are block based. Complex partial models are approximated, while
+  leaves use partial transmission rather than texture-alpha sampling.
+- The shaderpack light pass supports configurable budgets of up to 96 point
+  lights and 32 area lights per frame.
+- This is a client-side rendering compatibility mod. It does not add light
+  blocks or other gameplay content by itself.
+
+===============================================================================
+
+# Version 1.4.4 - Render target resize stability
+
+## Fixed
+
+- Fixed colored lights disappearing after changing the Minecraft window size or toggling fullscreen.
+- VILC now resets its light-pass framebuffer state when the main render target is resized or recreated.
+
+===============================================================================
+
+# Version 1.4.3 - Combined YesMenn config bridge
+
+## Added
+
+- Added a config screen bridge that opens the combined YesMenn Colored Lights config screen when YesMenn is installed.
+- VILC's existing config hotkey now keeps the same keybind while routing to the combined screen when available.
+
+## Changed
+
+- VILC still opens its standalone light-rendering config screen when YesMenn is not installed.
+
+===============================================================================
+
+# Version 1.4.2 - Spotlight beam shaping support
+
+## Added
+
+- Added a public area-light shape registry for mods that need per-light beam softness and focus controls.
+- Added shader uniforms for per-area-light beam edge softness and focus.
+
+## Changed
+
+- Area-light cone falloff now uses per-light softness instead of one hard-coded edge width.
+- Area-light focus can now tighten or soften the cone core independently from brightness.
+
+===============================================================================
+
+# Version 1.4.0 - Updated dependencies, restored lights without shaderpack
+
+## Added
+
+- Added a dedicated depth-based light pass for Iris installations with shaderpacks disabled
+- Added automatic switching between the native framebuffer pass and the Iris shaderpack pass
+
+## Changed
+
+- Updated compatibility for Veil 4.1.4
+- Updated compatibility for Iris 1.8.14 beta 1
+- Updated compatibility for Sodium 0.8.12 beta 1
+- Rebalanced shaderpack light contribution to preserve block textures and material detail
+- Simplified shaderpack compositing to a single controlled light pass
+- Removed the secondary screen-blended fill pass introduced in 1.3.3
+
+## Fixed
+
+- Fixed Veil colored lights disappearing when Iris was installed but shaderpacks were disabled
+- Fixed overly saturated shaderpack lighting replacing the visible texture of illuminated blocks
+- Fixed a crash caused by attempting to reactivate Veil dynamic-buffer internals that Veil disables while Iris is installed
+
+===============================================================================
+
+# Version 1.3.3 - Local-light shadow fill and shaderpack lighting balance
+
+## Improved
+
+- Added a bounded screen-blended fill pass for strong nearby Veil lights
+- Local colored lights now soften existing sunlight and moonlight shadows
+- Dark shaderpack pixels receive more fill than already bright surfaces
+
+===============================================================================
+
+# Version 1.3.2 - Full area-light surface support
+
+## Added
+
+- Area-light width, height, and orientation are now transferred into the Iris light pass
+- Area lighting now originates from the nearest point on the emitting surface
+
+## Changed
+
+- Area-light distance attenuation, surface response, and voxel shadows now use the actual rectangular emitter
+- Rectangular and tube-shaped Veil lights retain their spatial extent with shaderpacks enabled
+
+## Fixed
+
+- Fixed 180-degree area lights producing a dark directional seam
+
+===============================================================================
+
+# Version 1.3.0 - Independent quality controls and expanded debug compatibility
+
+## Added
+
+- Configurable point-light budget from 1 to 96 lights
+- Configurable area-light budget from 1 to 32 lights
+- Independent toggles for detailed surface normals and voxel shadows
+- Custom quality state for settings that differ from a preset
+- BetterF3 compatibility for VILC diagnostics
+
+## Changed
+
+- Quality presets now apply complete defaults instead of locking individual settings
+- Performance defaults to 24 point lights and 8 area lights
+- Balanced defaults to 48 point lights and 16 area lights
+- High defaults to 96 point lights and 32 area lights
+- Reworked the configuration screen into separate performance and appearance controls
+- F3 diagnostics now show the active configured light budgets
+
+===============================================================================
+
+# Version 1.0.0 - Initial release
+
+## Added
+
+- Initial NeoForge 1.21.1 support.
+- Veil shader capture and Iris shader-program translation.
+- Vertex and fragment shader integration into Iris G-buffer programs.
+- Opaque Veil effect support.
+- Translucent Veil effect support through `EntitiesTrans`.
+- Dithering fallback for translucent effects.
+- Iris shadow-pass integration for Veil-rendered geometry.
+- Shader cache with automatic invalidation after shaderpack reloads.
+- Graceful fallback to standard Veil rendering when Iris shaders are disabled.
+- Bundled GLSL Transformer runtime.
+
+===============================================================================
+
+# Version 1.1.0 - Dynamic Veil lighting support and rendering controls
+
+## Added
+
+- Dedicated Iris-compatible fullscreen light pass.
+- Veil point-light support with shaderpacks enabled.
+- Veil area- and cone-light support with shaderpacks enabled.
+- Multiple-light color accumulation and color mixing.
+- Perceptual RGB luminance normalization.
+- Configurable exposure, color strength, neutral brightness, and luminance boost.
+- Configurable color saturation with a slightly richer default.
+- In-game configuration screen with live updates.
+- Default `O` key binding and mod-list configuration entry.
+- Persistent JSON configuration.
+- F3 diagnostics for pass state, light counts, voxel occlusion, and render settings.
+- World-position reconstruction from the Iris depth buffer.
+- Screen-space surface-normal reconstruction.
+- Angle-dependent diffuse surface lighting.
+- Veil voxel-grid integration for occluded lights.
+- DDA-based block shadow calculation.
+- Leaves as voxel shadow casters.
+- Partial light transmission through leaves.
+
+## Improved
+
+- More consistent brightness between red, green, and blue lights.
+- More natural surface response based on the angle toward each light.
+- Smooth grazing-angle lighting without a hard Lambert cutoff.
+- Texture preservation under bright and overlapping colored lights.
+- Continuous color mixing without dominant-channel seams.
+- Color-neutral intensity compression for smooth RGB transitions.
+- Brighter shaderpack lighting with additional tone-map headroom.
+- Expanded exposure and color-strength adjustment ranges.
+- Stabilized reconstructed surface normals to remove view-dependent striping on flat surfaces.
+- Gamut-safe saturation adjustment without hard channel clipping.
+- Recentered the configuration layout with consistent title, hint, slider, and button spacing.
+- Reduced unnecessary DDA work outside a light's range or on unlit surfaces.
+- Light-block self-occlusion handling.
+
+## Fixed
+
+- Fixed Veil lights disappearing when shaderpacks were enabled.
+- Fixed light colors appearing mostly white.
+- Fixed light influence moving with the camera or cursor.
+- Fixed harsh color transitions between differently colored lights.
+- Fixed overexposed areas losing their visible texture.
+- Fixed occluded Light Blocks appearing disabled while the camera was nearby.
+- Fixed leaves failing to cast voxel shadows.
+- Replaced direct client-memory voxel uploads with persistent pixel-buffer
+  staging to avoid the NVIDIA driver crashes observed during voxel-grid updates.
+
+===============================================================================
+
+# Version 1.2.0 - Performance, stability, color balance and integration
+
+## Added
+
+- Performance, Balanced, and High rendering-quality presets.
+- Live quality selection in the in-game configuration screen.
+- `#veil_iris_lights:non_occluding` block tag for light-source blocks that
+  should not block their own Veil light.
+- Public `VeilIrisLightOcclusion` registration API for client mods.
+- Optional built-in tag entry for `yesmenn:colored_light`.
+
+## Improved
+
+- Reduced the blue-channel brightness advantage with bounded, smooth luminance
+  compensation for more even RGB falloff and better-centered color mixing.
+- Cached all fullscreen light-pass uniform locations.
+- Reused light upload arrays and shadow normal matrices instead of allocating
+  them repeatedly while rendering.
+- Avoided repeated framebuffer completeness checks when the render target has
+  not changed.
+- Restored OpenGL texture bindings per texture unit after the light pass.
+- Added a lower-cost derivative-normal path for Performance and Balanced modes.
+- Reduced normal-depth sampling and disabled voxel tracing in Performance mode.
+- Kept all quality presets at the full 48 point-light and 16 area-light limits.
+- Dropped stale translated-shader cache references whenever Iris rebuilds its
+  shaderpack pipeline while leaving OpenGL resource ownership to Iris.
+- Simplified the translucent dithering patcher and removed unused code paths.
+- Reduced routine shader translation messages from info to debug logging.
+- Replaced the hard-coded MennURL light-block check with a reusable block tag.
+
+## Fixed
+
+- Fixed stale translated shader references accumulating across shaderpack reloads.
+- Fixed a native crash during shaderpack switching caused by closing
+  Iris-owned shader programs from the Compat cache.
+- Fixed invalid Veil development-resource watch paths spamming startup errors.
+- Fixed the active texture unit not always being restored correctly after the
+  shaderpack light pass.
+- Fixed excessive blue luminance compensation producing a visibly larger blue
+  falloff and shifting cyan transitions toward green.
+- Restored Veil's camera-centered voxel shadow grid so visible walls and
+  surfaces receive consistent occlusion from all nearby light sources.
+- Traced distant light rays through the known section of the voxel grid without
+  abruptly suppressing lights outside its finite range.
+- Kept the existing multiplicative shaderpack light compositing to avoid
+  over-brightening shaderpack output.
+- Kept lights visible without temporary occlusion only while Veil is actively
+  rebuilding its voxel shadow grid.

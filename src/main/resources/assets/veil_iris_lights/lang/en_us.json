@@ -10,11 +10,15 @@
   "option.veil_iris_lights.quality.custom": "Custom",
   "option.veil_iris_lights.point_lights": "Point lights: %s",
   "option.veil_iris_lights.area_lights": "Area lights: %s",
-  "option.veil_iris_lights.detailed_normals": "Detailed normals: %s",
   "option.veil_iris_lights.voxel_shadows": "Voxel shadows: %s",
   "option.veil_iris_lights.exposure": "Exposure: %s",
   "option.veil_iris_lights.color_strength": "Color strength: %s",
   "option.veil_iris_lights.color_saturation": "Color saturation: %s",
   "option.veil_iris_lights.neutral_lift": "Neutral brightness: %s",
-  "option.veil_iris_lights.luminance_limit": "Color luminance limit: %s"
+  "option.veil_iris_lights.luminance_limit": "Color luminance limit: %s",
+  "option.veil_iris_lights.volumetric_beams": "Light beams: %s",
+  "option.veil_iris_lights.volumetric": "Light beam quality: %s",
+  "option.veil_iris_lights.volumetric.1": "Low",
+  "option.veil_iris_lights.volumetric.2": "Medium",
+  "option.veil_iris_lights.volumetric.3": "High"
 }
