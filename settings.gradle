@@ -1,9 +1,23 @@
 pluginManagement {
     repositories {
+        maven { url = 'https://maven.fabricmc.net/' }
+        maven { url = 'https://maven.architectury.dev/' }
+        maven { url = 'https://maven.neoforged.net/releases/' }
         gradlePluginPortal()
+    }
+    plugins {
+        id 'dev.architectury.loom' version "${architectury_loom_version}"
+        id 'architectury-plugin' version "${architectury_plugin_version}"
+        id 'com.github.johnrengelman.shadow' version '8.1.1'
     }
 }
 
 plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
+
+rootProject.name = 'veil_iris_lights'
+
+include 'common'
+include 'neoforge'
+include 'fabric'

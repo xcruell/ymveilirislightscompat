@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.yesmenn.veilirislights.mixin.debug",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "MixinDebugScreenOverlayFabric"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

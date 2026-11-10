@@ -1,0 +1,205 @@
+plugins {
+    id 'dev.architectury.loom'
+    id 'com.github.johnrengelman.shadow'
+}
+
+base {
+    archivesName = archives_base_name + '-fabric'
+}
+
+loom {
+    mixin {
+        useLegacyMixinAp = true
+        defaultRefmapName = 'veil_iris_lights-refmap.json'
+    }
+}
+
+configurations {
+    common
+    shadowCommon
+    compileClasspath.extendsFrom common
+    runtimeClasspath.extendsFrom common
+}
+
+// Loom remaps modLocalRuntime deps but strips the fabric.mod.json "jars" section.
+// Plain-library JiJ nested JARs (no fabric.mod.json inside them, e.g. jcpp, glsl-transformer)
+// are therefore NOT added to the run classpath. Extract them from the Loom-cached Iris JAR at
+// configuration time so they are present when Loom builds the runClient classpath.
+def irisLibsDir = file("${rootProject.projectDir}/.gradle/iris-libs")
+def irisModrinthCache = new File(rootProject.projectDir, '.gradle/loom-cache/remapped_mods/remapped/maven/modrinth')
+if (irisModrinthCache.exists()) {
+    irisModrinthCache.eachDir { hashDir ->
+        if (!hashDir.name.startsWith('iris-')) return
+        hashDir.eachDir { versionDir ->
+            versionDir.listFiles { f -> f.name.endsWith('.jar') }?.each { irisJar ->
+                try {
+                    new java.util.zip.ZipFile(irisJar).withCloseable { zip ->
+                        if (zip.getEntry('iris.refmap.json') == null) return
+                        irisLibsDir.mkdirs()
+                        ['jcpp-1.4.14.jar', 'glsl-transformer-3.0.0-pre3.jar', 'antlr4-runtime-4.13.1.jar'].each { libName ->
+                            def entry = zip.getEntry("META-INF/jars/${libName}")
+                            if (entry) {
+                                def outFile = new File(irisLibsDir, libName)
+                                if (!outFile.exists()) {
+                                    outFile.bytes = zip.getInputStream(entry).bytes
+                                    logger.lifecycle("Extracted Iris nested lib: {}", libName)
+                                }
+                            }
+                        }
+                    }
+                } catch (ignored) {}
+            }
+        }
+    }
+}
+
+dependencies {
+    if (irisLibsDir.exists()) {
+        runtimeOnly(fileTree(dir: irisLibsDir, include: '*.jar'))
+    }
+    common(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+    shadowCommon(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.layered {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${parchment_minecraft_version}:${parchment_mappings_version}@zip")
+    }
+    modImplementation "net.fabricmc:fabric-loader:${fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+
+    modCompileOnly("maven.modrinth:iris:${iris_version}-fabric") { transitive = false }
+    modLocalRuntime("maven.modrinth:iris:${iris_version}-fabric")
+
+    modCompileOnly("foundry.veil:veil-fabric-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+    }
+    modLocalRuntime("foundry.veil:veil-fabric-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+    }
+
+    modLocalRuntime("net.caffeinemc:sodium-fabric:${sodium_version}")
+    modCompileOnly("com.terraformersmc:modmenu:${modmenu_version}")
+    modLocalRuntime("com.terraformersmc:modmenu:${modmenu_version}")
+}
+
+sourceSets.main.java.srcDir project(':common').sourceSets.main.java.srcDirs
+
+// Workaround: Iris 1.8.14-beta.1 dev-mode bug — multiple Mixin classes have @ModifyArg/@Inject
+// annotations where the target method is stored WITHOUT a descriptor in the class bytecode constant
+// pool. iris.refmap.json only has full-descriptor keys, so RemappingReferenceMapper falls back to
+// mapMethodName(owner, name, null) → NPE at MixinIntermediaryDevRemapper.mapMethodName:125.
+// Fix: scan iris.refmap.json and insert a descriptor-less key for every full-descriptor
+// class-qualified method ref that is missing one. Applies to both "mappings" and "data" sections.
+tasks.register('patchIrisRefmap') {
+    description = 'Patches iris.refmap.json in the Loom-cached Iris JAR to fix all descriptor-less annotation NPEs (Iris 1.8.14-beta.1 dev-mode bug).'
+    doLast {
+        def irisJar = null
+        def modrinthCache = new File(rootProject.projectDir, '.gradle/loom-cache/remapped_mods/remapped/maven/modrinth')
+        if (modrinthCache.exists()) {
+            modrinthCache.eachDir { hashDir ->
+                if (hashDir.name.startsWith('iris-') && irisJar == null) {
+                    hashDir.eachDir { versionDir ->
+                        versionDir.listFiles { f -> f.name.endsWith('.jar') }?.each { f ->
+                            if (irisJar == null) {
+                                try {
+                                    new java.util.zip.ZipFile(f).withCloseable { z ->
+                                        if (z.getEntry('iris.refmap.json') != null) irisJar = f
+                                    }
+                                } catch (ignored) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!irisJar?.exists()) {
+            logger.warn('patchIrisRefmap: Iris JAR not found in Loom cache, skipping patch')
+            return
+        }
+
+        def uri = URI.create("jar:${irisJar.toURI()}")
+        java.nio.file.FileSystems.newFileSystem(uri, ['create': 'false'] as Map).withCloseable { fs ->
+            def refmapPath = fs.getPath('/iris.refmap.json')
+            if (!java.nio.file.Files.exists(refmapPath)) {
+                logger.warn('patchIrisRefmap: iris.refmap.json not found inside JAR')
+                return
+            }
+            def content = new String(java.nio.file.Files.readAllBytes(refmapPath), 'UTF-8')
+            def refmap = new groovy.json.JsonSlurper().parseText(content)
+
+            // For each class map (from "mappings" or "data" sub-sections), add a descriptor-less
+            // entry for every class-qualified method ref "LOwner;method(desc)return" that lacks one.
+            // Pattern: starts with L, semicolon, lowercase method name, then opening paren.
+            // Lowercase filter avoids matching static field refs like MOON_LOCATION:Lnet/minecraft/...
+            def addMissingNoDescKeys = { Map classMap ->
+                int count = 0
+                classMap.each { className, entries ->
+                    if (!(entries instanceof Map)) return
+                    def toAdd = [:]
+                    entries.each { key, value ->
+                        def matcher = key =~ /^(L[^;]+;[a-z][^(:]*)\(/
+                        if (matcher) {
+                            def noDescKey = matcher[0][1]
+                            if (!entries.containsKey(noDescKey) && !toAdd.containsKey(noDescKey)) {
+                                toAdd[noDescKey] = value
+                                count++
+                            }
+                        }
+                    }
+                    entries.putAll(toAdd)
+                }
+                return count
+            }
+
+            int addedCount = 0
+            if (refmap.mappings instanceof Map) addedCount += addMissingNoDescKeys(refmap.mappings)
+            if (refmap.data instanceof Map) {
+                refmap.data.each { sectionKey, sectionMap ->
+                    if (sectionMap instanceof Map) addedCount += addMissingNoDescKeys(sectionMap)
+                }
+            }
+
+            if (addedCount > 0) {
+                def patched = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(refmap))
+                java.nio.file.Files.write(refmapPath, patched.getBytes('UTF-8'))
+                logger.lifecycle('patchIrisRefmap: added {} descriptor-less entries in {}', addedCount, irisJar.name)
+            } else {
+                logger.lifecycle('patchIrisRefmap: already up to date ({})', irisJar.name)
+            }
+        }
+    }
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
+    from(rootProject.file('LICENSE')) { into 'META-INF' }
+    // Include common resources (icon.png, lang files, etc.) so Fabric Loader finds them in dev run
+    from project(':common').sourceSets.main.resources
+}
+
+tasks.named('runClient').configure {
+    dependsOn 'patchIrisRefmap'
+}
+
+shadowJar {
+    exclude 'architectury.common.json'
+    configurations = [project.configurations.shadowCommon]
+    archiveClassifier = 'dev-shadow'
+}
+
+remapJar {
+    input.set shadowJar.archiveFile
+    dependsOn shadowJar
+    archiveClassifier = ''
+}
+
+jar {
+    archiveClassifier = 'dev'
+}

@@ -1,0 +1,20 @@
+{
+  "key.categories.veil_iris_lights": "Veil Iris Lights",
+  "key.veil_iris_lights.open_config": "Open light configuration",
+  "screen.veil_iris_lights.config": "Veil Iris Lights",
+  "screen.veil_iris_lights.live_hint": "Changes are previewed immediately and saved when closing",
+  "option.veil_iris_lights.quality": "Quality: %s",
+  "option.veil_iris_lights.quality.performance": "Performance",
+  "option.veil_iris_lights.quality.balanced": "Balanced",
+  "option.veil_iris_lights.quality.high": "High",
+  "option.veil_iris_lights.quality.custom": "Custom",
+  "option.veil_iris_lights.point_lights": "Point lights: %s",
+  "option.veil_iris_lights.area_lights": "Area lights: %s",
+  "option.veil_iris_lights.detailed_normals": "Detailed normals: %s",
+  "option.veil_iris_lights.voxel_shadows": "Voxel shadows: %s",
+  "option.veil_iris_lights.exposure": "Exposure: %s",
+  "option.veil_iris_lights.color_strength": "Color strength: %s",
+  "option.veil_iris_lights.color_saturation": "Color saturation: %s",
+  "option.veil_iris_lights.neutral_lift": "Neutral brightness: %s",
+  "option.veil_iris_lights.luminance_limit": "Color luminance limit: %s"
+}

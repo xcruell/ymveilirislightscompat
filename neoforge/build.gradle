@@ -1,0 +1,212 @@
+plugins {
+    id 'dev.architectury.loom'
+    id 'com.github.johnrengelman.shadow'
+}
+
+base {
+    archivesName = archives_base_name + '-neoforge'
+}
+
+loom {
+    mixin {
+        useLegacyMixinAp = true
+        defaultRefmapName = 'veil_iris_lights-refmap.json'
+    }
+    runs {
+        client {
+            client()
+        }
+        configureEach {
+            property 'forge.logging.markers', 'REGISTRIES'
+        }
+    }
+}
+
+configurations {
+    common
+    shadowCommon
+    directRunMod  // JARs copied directly to run/mods (bypass Loom remapping)
+    compileClasspath.extendsFrom common
+    runtimeClasspath.extendsFrom common
+}
+
+dependencies {
+    common(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+    shadowCommon(project(path: ':common', configuration: 'namedElements')) { transitive = false }
+
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    neoForge "net.neoforged:neoforge:${neo_version}"
+    mappings loom.layered {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${parchment_minecraft_version}:${parchment_mappings_version}@zip")
+    }
+
+    modCompileOnly("maven.modrinth:iris:${iris_version}-neoforge")
+    modLocalRuntime("maven.modrinth:iris:${iris_version}-neoforge")
+
+    modCompileOnly("foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+    }
+    // Veil: same JarJar problem as Sodium (Loom strips metadata.json → molang-compiler + glsl-processor fail to load).
+    // Copy original JAR to run/mods/ via syncRunMods task. JarJar loads its deps from within the original JAR.
+    directRunMod("foundry.veil:veil-neoforge-${minecraft_version}:${veil_version}") {
+        exclude group: 'maven.modrinth'
+        exclude group: 'me.fallenbreath'
+        transitive = false
+    }
+
+    // Sodium: Loom strips JarJar metadata.json during remapping → mod won't load via modLocalRuntime.
+    // Instead: copy the original JAR directly to run/mods via syncRunMods task.
+    modCompileOnly("net.caffeinemc:sodium-neoforge-api:${sodium_version}")
+    directRunMod("net.caffeinemc:sodium-neoforge:${sodium_version}") { transitive = false }
+}
+
+def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    def replaceProperties = [
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from 'src/main/templates'
+    into 'build/generated/sources/modMetadata'
+}
+
+// Include common Java sources so they compile into neoforge/build/classes/java/main.
+// This is required because NeoForge FML's ModuleClassLoader only loads classes from
+// the VILC module group (adjacent classpath entries with neoforge.mods.toml).
+// The common devlibs JAR sits outside that group → common mixin classes are invisible.
+// Compiling common sources here puts them in the neoforge classes dir, which IS in VILC's module.
+sourceSets.main.java.srcDir project(':common').sourceSets.main.java.srcDirs
+sourceSets.main.resources.srcDir generateModMetadata
+
+// Copies directRunMod JARs to run/mods before each runClient.
+// Deletes all JARs in run/mods first to avoid stale versions accumulating.
+tasks.register('syncRunMods') {
+    doLast {
+        def modsDir = project.file('run/mods')
+        modsDir.mkdirs()
+        modsDir.listFiles { f -> f.name.endsWith('.jar') }?.each { it.delete() }
+        project.copy {
+            from configurations.directRunMod
+            into modsDir
+        }
+    }
+}
+
+// NeoForge Iris JarJar problem: Loom remaps modLocalRuntime deps and strips META-INF/jarjar/metadata.json.
+// Without it, NeoForge JarJar cannot locate jcpp/glsl-transformer bundled inside the Iris JAR →
+// crash on shader activation: NoClassDefFoundError: org/anarres/cpp/PreprocessorListener.
+// Fix: restore the metadata.json from the original (pre-remapping) download; the nested JAR files
+// themselves are kept by Loom, only the metadata is missing.
+tasks.register('patchIrisJarJarMetadata') {
+    description = 'Restores META-INF/jarjar/metadata.json in the Loom-cached NeoForge Iris JAR, stripped by Loom during remapping.'
+    doLast {
+        def irisJar = null
+        def modrinthCache = new File(rootProject.projectDir, '.gradle/loom-cache/remapped_mods/remapped/maven/modrinth')
+        if (modrinthCache.exists()) {
+            modrinthCache.eachDir { hashDir ->
+                if (hashDir.name.startsWith('iris-') && irisJar == null) {
+                    hashDir.eachDir { versionDir ->
+                        versionDir.listFiles { f -> f.name.endsWith('-neoforge.jar') }?.each { f ->
+                            if (irisJar == null) {
+                                try {
+                                    new java.util.zip.ZipFile(f).withCloseable { z ->
+                                        if (z.getEntry('net/irisshaders/iris/Iris.class') != null) irisJar = f
+                                    }
+                                } catch (ignored) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (!irisJar?.exists()) { logger.warn('patchIrisJarJarMetadata: NeoForge Iris JAR not found'); return }
+
+        def uri = URI.create("jar:${irisJar.toURI()}")
+        java.nio.file.FileSystems.newFileSystem(uri, ['create': 'false'] as Map).withCloseable { fs ->
+            def metadataPath = fs.getPath('/META-INF/jarjar/metadata.json')
+            if (java.nio.file.Files.exists(metadataPath)) {
+                logger.lifecycle('patchIrisJarJarMetadata: already present ({})', irisJar.name)
+                return
+            }
+            // Exact content from original iris-1.8.14-beta.1+1.21.1-neoforge.jar before Loom remapping.
+            def metadata = '''{
+  "jars": [
+    {
+      "identifier": {"group": "io.github.douira", "artifact": "glsl-transformer"},
+      "version": {"range": "[3.0.0-pre3,)", "artifactVersion": "3.0.0-pre3"},
+      "path": "META-INF/jarjar/glsl-transformer-3.0.0-pre3.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {"group": "org.anarres", "artifact": "jcpp"},
+      "version": {"range": "[1.4.14,)", "artifactVersion": "1.4.14"},
+      "path": "META-INF/jarjar/jcpp-1.4.14.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {"group": "org.sinytra.forgified-fabric-api", "artifact": "fabric-api-base"},
+      "version": {"range": "[0.4.42+d1308ded19,)", "artifactVersion": "0.4.42+d1308ded19"},
+      "path": "META-INF/jarjar/fabric-api-base-0.4.42+d1308ded19.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {"group": "org.sinytra.forgified-fabric-api", "artifact": "fabric-block-view-api-v2"},
+      "version": {"range": "[1.0.10+9afaaf8c19,)", "artifactVersion": "1.0.10+9afaaf8c19"},
+      "path": "META-INF/jarjar/fabric-block-view-api-v2-1.0.10+9afaaf8c19.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {"group": "org.sinytra.forgified-fabric-api", "artifact": "fabric-renderer-api-v1"},
+      "version": {"range": "[3.4.0+acb05a3919,)", "artifactVersion": "3.4.0+acb05a3919"},
+      "path": "META-INF/jarjar/fabric-renderer-api-v1-3.4.0+acb05a3919.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {"group": "org.sinytra.forgified-fabric-api", "artifact": "fabric-rendering-data-attachment-v1"},
+      "version": {"range": "[0.3.48+73761d2e19,)", "artifactVersion": "0.3.48+73761d2e19"},
+      "path": "META-INF/jarjar/fabric-rendering-data-attachment-v1-0.3.48+73761d2e19.jar",
+      "isObfuscated": false
+    }
+  ]
+}'''
+            java.nio.file.Files.write(metadataPath, metadata.getBytes('UTF-8'))
+            logger.lifecycle('patchIrisJarJarMetadata: restored metadata.json in {}', irisJar.name)
+        }
+    }
+}
+
+tasks.named('runClient').configure {
+    dependsOn 'syncRunMods', 'patchIrisJarJarMetadata'
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    // Include common resources so mixin JSON configs are in NeoForge FML's classloader scope
+    from project(':common').sourceSets.main.resources
+    from(rootProject.file('LICENSE')) {
+        into 'META-INF'
+    }
+}
+
+shadowJar {
+    exclude 'architectury.common.json'
+    configurations = [project.configurations.shadowCommon]
+    archiveClassifier = 'dev-shadow'
+}
+
+remapJar {
+    input.set shadowJar.archiveFile
+    dependsOn shadowJar
+    archiveClassifier = ''
+}
+
+jar {
+    archiveClassifier = 'dev'
+}
