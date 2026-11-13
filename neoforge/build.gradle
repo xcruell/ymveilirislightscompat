@@ -1,6 +1,5 @@
 plugins {
     id 'dev.architectury.loom'
-    id 'com.github.johnrengelman.shadow'
 }
 
 base {
@@ -10,7 +9,7 @@ base {
 loom {
     mixin {
         useLegacyMixinAp = true
-        defaultRefmapName = 'veil_iris_lights-refmap.json'
+        defaultRefmapName = 'ymvilc-refmap.json'
     }
     runs {
         client {
@@ -24,7 +23,6 @@ loom {
 
 configurations {
     common
-    shadowCommon
     directRunMod  // JARs copied directly to run/mods (bypass Loom remapping)
     compileClasspath.extendsFrom common
     runtimeClasspath.extendsFrom common
@@ -32,7 +30,6 @@ configurations {
 
 dependencies {
     common(project(path: ':common', configuration: 'namedElements')) { transitive = false }
-    shadowCommon(project(path: ':common', configuration: 'namedElements')) { transitive = false }
 
     minecraft "com.mojang:minecraft:${minecraft_version}"
     neoForge "net.neoforged:neoforge:${neo_version}"
@@ -55,6 +52,9 @@ dependencies {
         exclude group: 'me.fallenbreath'
         transitive = false
     }
+
+    // YM Duct Tape (YM GUI kit for the settings screen), required mod; the jar is kept in libs/ (copied to run/mods for runs)
+    modCompileOnly fileTree('../libs') { include 'ymducttape-v*-neoforge-*.jar'; exclude '*-dev.jar' }
 
     // Sodium: Loom strips JarJar metadata.json during remapping → mod won't load via modLocalRuntime.
     // Instead: copy the original JAR directly to run/mods via syncRunMods task.
@@ -95,6 +95,7 @@ tasks.register('syncRunMods') {
         modsDir.listFiles { f -> f.name.endsWith('.jar') }?.each { it.delete() }
         project.copy {
             from configurations.directRunMod
+            from(rootProject.fileTree('libs')) { include 'ymducttape-v*-neoforge-*.jar'; exclude '*-dev.jar' }
             into modsDir
         }
     }
@@ -195,18 +196,14 @@ tasks.named('processResources', ProcessResources).configure {
     }
 }
 
-shadowJar {
-    exclude 'architectury.common.json'
-    configurations = [project.configurations.shadowCommon]
-    archiveClassifier = 'dev-shadow'
-}
-
+// No shadow plugin: the common sources and resources are already compiled/copied into this module (srcDir +
+// processResources), so the plain jar contains everything. (Shadow 8.x does not work with Gradle 9.)
 remapJar {
-    input.set shadowJar.archiveFile
-    dependsOn shadowJar
     archiveClassifier = ''
+    archiveFileName = "${archives_base_name}-v${project.version}-neoforge-${minecraft_version}.jar"
 }
 
 jar {
     archiveClassifier = 'dev'
+    archiveFileName = "${archives_base_name}-v${project.version}-neoforge-${minecraft_version}-dev.jar"
 }

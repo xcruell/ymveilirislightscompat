@@ -1,4 +1,4 @@
-# Veil Iris Lights Compat
+# YM Veil Iris Lights Compat
 
 Client-side NeoForge 1.21.1 mod that renders Veil point and area lights while an
 Iris shaderpack is active.
@@ -18,7 +18,7 @@ automatically. No direct dependency on this mod's Java classes is required.
 Blocks that should not occlude a light placed inside themselves can be added to:
 
 ```text
-#veil_iris_lights:non_occluding
+#ymvilc:non_occluding
 ```
 
 The tag can be supplied by a mod or datapack. Client mods can also register a

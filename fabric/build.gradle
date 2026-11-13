@@ -1,6 +1,5 @@
 plugins {
     id 'dev.architectury.loom'
-    id 'com.github.johnrengelman.shadow'
 }
 
 base {
@@ -10,13 +9,12 @@ base {
 loom {
     mixin {
         useLegacyMixinAp = true
-        defaultRefmapName = 'veil_iris_lights-refmap.json'
+        defaultRefmapName = 'ymvilc-refmap.json'
     }
 }
 
 configurations {
     common
-    shadowCommon
     compileClasspath.extendsFrom common
     runtimeClasspath.extendsFrom common
 }
@@ -58,7 +56,6 @@ dependencies {
         runtimeOnly(fileTree(dir: irisLibsDir, include: '*.jar'))
     }
     common(project(path: ':common', configuration: 'namedElements')) { transitive = false }
-    shadowCommon(project(path: ':common', configuration: 'namedElements')) { transitive = false }
 
     minecraft "com.mojang:minecraft:${minecraft_version}"
     mappings loom.layered {
@@ -81,6 +78,9 @@ dependencies {
     }
 
     modLocalRuntime("net.caffeinemc:sodium-fabric:${sodium_version}")
+    // YM Duct Tape (YM GUI kit for the settings screen), required mod; the jar is kept in libs/
+    modCompileOnly fileTree('../libs') { include 'ymducttape-v*-fabric-*.jar'; exclude '*-dev.jar' }
+    modLocalRuntime fileTree('../libs') { include 'ymducttape-v*-fabric-*.jar'; exclude '*-dev.jar' }
     modCompileOnly("com.terraformersmc:modmenu:${modmenu_version}")
     modLocalRuntime("com.terraformersmc:modmenu:${modmenu_version}")
 }
@@ -188,18 +188,14 @@ tasks.named('runClient').configure {
     dependsOn 'patchIrisRefmap'
 }
 
-shadowJar {
-    exclude 'architectury.common.json'
-    configurations = [project.configurations.shadowCommon]
-    archiveClassifier = 'dev-shadow'
-}
-
+// No shadow plugin: the common sources and resources are already compiled/copied into this module (srcDir +
+// processResources), so the plain jar contains everything. (Shadow 8.x does not work with Gradle 9.)
 remapJar {
-    input.set shadowJar.archiveFile
-    dependsOn shadowJar
     archiveClassifier = ''
+    archiveFileName = "${archives_base_name}-v${project.version}-fabric-${minecraft_version}.jar"
 }
 
 jar {
     archiveClassifier = 'dev'
+    archiveFileName = "${archives_base_name}-v${project.version}-fabric-${minecraft_version}-dev.jar"
 }

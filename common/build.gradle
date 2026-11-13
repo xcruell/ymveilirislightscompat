@@ -5,7 +5,7 @@ plugins {
 loom {
     mixin {
         useLegacyMixinAp = true
-        defaultRefmapName = 'veil_iris_lights-refmap.json'
+        defaultRefmapName = 'ymvilc-refmap.json'
     }
 }
 
@@ -18,6 +18,9 @@ dependencies {
 
     // Mixin + net.fabricmc.api (EnvType etc.) — provided by fabric-loader; needed for common compilation
     modCompileOnly("net.fabricmc:fabric-loader:${fabric_loader_version}")
+
+    // YM Duct Tape (YM GUI kit for the settings screen), required mod; the jar is kept in libs/
+    modCompileOnly fileTree('../libs') { include 'ymducttape-v*-fabric-*.jar'; exclude '*-dev.jar' }
 
     // Iris — NeoForge artifact used as compile-only reference; Fabric artifact used at runtime in fabric subproject
     modCompileOnly("maven.modrinth:iris:${iris_version}-neoforge") { transitive = false }

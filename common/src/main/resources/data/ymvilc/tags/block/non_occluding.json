@@ -1,0 +1,15 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "yesmenn:colored_light", "required": false },
+    { "id": "yesmenn:colored_light_tube", "required": false },
+    { "id": "yesmenn:colored_light_panel", "required": false },
+    { "id": "yesmenn:colored_light_spotlight", "required": false },
+    { "id": "yesmenn:invisible_colored_light_spotlight", "required": false },
+    { "id": "ymcoloredlights:colored_light", "required": false },
+    { "id": "ymcoloredlights:colored_light_tube", "required": false },
+    { "id": "ymcoloredlights:colored_light_panel", "required": false },
+    { "id": "ymcoloredlights:colored_light_spotlight", "required": false },
+    { "id": "ymcoloredlights:invisible_colored_light_spotlight", "required": false }
+  ]
+}

@@ -1,38 +1,39 @@
 {
   "schemaVersion": 1,
-  "id": "veil_iris_lights",
+  "id": "ymvilc",
   "version": "${version}",
-  "name": "Veil Iris Lights",
+  "name": "YM Veil Iris Lights Compat",
   "description": "Renders Veil point and area lights on top of the active Iris shaderpack, with an optional fallback pass when shaderpacks are disabled.",
   "authors": ["xcruell", "YesMenn!"],
-  "license": "MIT",
+  "license": "YesMenn Custom License 1.0",
   "icon": "icon.png",
 
   "environment": "client",
 
   "entrypoints": {
     "client": [
-      "com.yesmenn.veilirislights.VeilIrisLightsFabric"
+      "com.yesmenn.vilc.YMVilcFabric"
     ],
     "modmenu": [
-      "com.yesmenn.veilirislights.VeilIrisLightsModMenu"
+      "com.yesmenn.vilc.YMVilcModMenu"
     ]
   },
 
   "mixins": [
-    "veil_iris_lights.mixins.iris.json",
-    "veil_iris_lights.mixins.veil.json",
-    "veil_iris_lights.mixins.betterf3.json",
-    "veil_iris_lights.mixins.fabric.json"
+    "ymvilc.mixins.iris.json",
+    "ymvilc.mixins.veil.json",
+    "ymvilc.mixins.betterf3.json",
+    "ymvilc.mixins.fabric.json"
   ],
 
   "depends": {
     "fabricloader": ">=0.14.0",
     "fabric-api": "*",
-    "minecraft": "~1.21.1",
+    "minecraft": "1.21.1",
     "iris": ">=1.8.14-beta.1",
     "veil": ">=4.5.2",
-    "sodium": ">=0.8.12-beta.1+mc1.21.1"
+    "sodium": ">=0.8.12-beta.1+mc1.21.1",
+    "ymducttape": ">=0.1.1"
   },
 
   "suggests": {

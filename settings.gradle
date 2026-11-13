@@ -8,7 +8,6 @@ pluginManagement {
     plugins {
         id 'dev.architectury.loom' version "${architectury_loom_version}"
         id 'architectury-plugin' version "${architectury_plugin_version}"
-        id 'com.github.johnrengelman.shadow' version '8.1.1'
     }
 }
 
@@ -16,7 +15,7 @@ plugins {
     id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
 }
 
-rootProject.name = 'veil_iris_lights'
+rootProject.name = 'ymvilc'
 
 include 'common'
 include 'neoforge'

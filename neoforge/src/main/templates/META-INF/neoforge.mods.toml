@@ -37,6 +37,14 @@ config="${mod_id}.mixins.betterf3.json"
     side="BOTH"
 
 [[dependencies.${mod_id}]]
+    modId="ymducttape"
+    type="required"
+    reason="VILC's settings screen is built with the YM kit of YM Duct Tape."
+    versionRange="[0.1.1,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
     modId="iris"
     type="required"
     reason="VILC requires the Iris rendering pipeline APIs introduced in Iris 1.8.14 beta 1."
